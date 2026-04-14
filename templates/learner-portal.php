@@ -406,7 +406,7 @@ if ($is_applicant && !empty($latest_application)) {
 $current_tab = isset($_GET['tab']) ? sanitize_text_field(wp_unslash($_GET['tab'])) : 'overview';
 $valid_tabs  = $is_applicant
     ? array('overview')
-    : array('overview', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity');
+    : array('overview', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity', 'profile');
 if (!in_array($current_tab, $valid_tabs, true)) {
     $current_tab = 'overview';
 }
@@ -628,6 +628,11 @@ $unread_count = count($unread_notifications);
                        class="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium shadow-sm transition-all duration-200">
                         <i class="fas fa-globe mr-2"></i>
                         Go to website
+                    </a>
+                    <a href="<?php echo esc_url(nds_learner_portal_tab_url('profile')); ?>"
+                       class="inline-flex items-center px-4 py-2 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm font-medium shadow-sm transition-all duration-200">
+                        <i class="fas fa-user-cog mr-2"></i>
+                        Profile
                     </a>
                     <a href="<?php echo esc_url(wp_logout_url(home_url('/'))); ?>"
                        class="inline-flex items-center px-4 py-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-sm font-medium shadow-sm transition-all duration-200">
@@ -1432,6 +1437,10 @@ $unread_count = count($unread_notifications);
 
                     case 'activity':
                         include plugin_dir_path(__FILE__) . '../includes/partials/learner-dashboard-activity.php';
+                        break;
+
+                    case 'profile':
+                        include plugin_dir_path(__FILE__) . '../includes/partials/learner-dashboard-profile.php';
                         break;
 
                     default:
