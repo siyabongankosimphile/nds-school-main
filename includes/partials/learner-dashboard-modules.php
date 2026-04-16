@@ -6,7 +6,7 @@ if (!defined('ABSPATH')) {
 global $wpdb;
 
 // Verify required variables from parent scope
-if (!isset($learner_id)) {
+if (!isset($learner_id) || !isset($student)) {
     echo '<div class="p-6 text-red-600">Error: Student information not found.</div>';
     return;
 }
@@ -18,20 +18,9 @@ $modules_table = $wpdb->prefix . 'nds_modules';
 $student_modules_table = $wpdb->prefix . 'nds_student_modules';
 $courses_table = $wpdb->prefix . 'nds_courses';
 
-$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}");
-$module_code_col = in_array('code', $module_columns, true) ? 'code' : (in_array('module_code', $module_columns, true) ? 'module_code' : '');
-$module_type_col = in_array('type', $module_columns, true) ? 'type' : '';
-$module_duration_col = in_array('duration_hours', $module_columns, true) ? 'duration_hours' : (in_array('hours', $module_columns, true) ? 'hours' : '');
-$module_description_col = in_array('description', $module_columns, true) ? 'description' : '';
-
-$module_code_select = $module_code_col ? "m.{$module_code_col} AS code" : "'' AS code";
-$module_type_select = $module_type_col ? "m.{$module_type_col} AS type" : "'' AS type";
-$module_duration_select = $module_duration_col ? "m.{$module_duration_col} AS duration_hours" : "NULL AS duration_hours";
-$module_description_select = $module_description_col ? "m.{$module_description_col} AS description" : "'' AS description";
-
 // Get currently enrolled modules
 $query = "
-    SELECT sm.*, m.name, {$module_code_select}, {$module_type_select}, {$module_duration_select}, {$module_description_select}, c.name as course_name 
+    SELECT sm.*, m.name, m.code, m.type, m.duration_hours, m.description, c.name as course_name 
     FROM {$student_modules_table} sm
     JOIN {$modules_table} m ON sm.module_id = m.id
     JOIN {$courses_table} c ON m.course_id = c.id

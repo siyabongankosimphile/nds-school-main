@@ -161,7 +161,7 @@ function nds_learner_management_page() {
 
         <!-- Success/Error Messages -->
         <?php if ($message): ?>
-            <div id="messageAlert" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6 p-4 rounded-lg shadow-md <?php echo $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'; ?> flex justify-between items-center">
+            <div id="messageAlert" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6 p-4 rounded-lg shadow-md <?php echo $message_type === 'success' ? 'bg-green-100 border border-green-400 text-green-700' : 'bg-red-100 border border-red-400 text-red-700'; ?> flex justify-between items-center">
                 <div class="flex items-center">
                     <i class="fas fa-<?php echo $message_type === 'success' ? 'check-circle' : 'exclamation-circle'; ?> mr-3 text-xl"></i>
                     <span class="font-medium"><?php echo esc_html($message); ?></span>
@@ -298,7 +298,7 @@ function nds_learner_management_page() {
             <!-- Filters -->
             <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-6 mb-6">
                 <form method="GET" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
-                    <input type="hidden" name="page" value="nds-students">
+                    <input type="hidden" name="page" value="nds-all-learners">
 
                     <div>
                         <label class="block text-sm font-medium text-gray-700 mb-2">Search</label>
@@ -343,7 +343,7 @@ function nds_learner_management_page() {
                         <button type="submit" class="bg-green-600 hover:bg-green-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg">
                             <i class="fas fa-search"></i>Filter
                         </button>
-                        <a href="<?php echo admin_url('admin.php?page=nds-students'); ?>" class="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg">
+                        <a href="<?php echo admin_url('admin.php?page=nds-all-learners'); ?>" class="bg-gray-600 hover:bg-gray-700 text-white font-medium py-2 px-4 rounded-lg transition-all duration-200 flex items-center gap-2 shadow-md hover:shadow-lg">
                             <i class="fas fa-times"></i>Clear
                         </a>
                     </div>
@@ -1005,47 +1005,51 @@ function nds_learner_management_page() {
 add_action('admin_post_nds_bulk_delete_learners', 'nds_handle_bulk_delete_learners');
 function nds_handle_bulk_delete_learners() {
     if (!current_user_can('manage_options')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=unauthorized'));
-        exit;
+        wp_die('Unauthorized access');
     }
 
     // Verify nonce
     if (!isset($_POST['nds_bulk_nonce']) || !wp_verify_nonce($_POST['nds_bulk_nonce'], 'nds_bulk_action')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=security_check_failed'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=security_check_failed'));
         exit;
     }
 
     if (!isset($_POST['learner_ids'])) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=no_ids'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=no_ids'));
         exit;
     }
 
+    global $wpdb;
+    $students_table = $wpdb->prefix . 'nds_students';
     $ids = json_decode(stripslashes($_POST['learner_ids']), true);
-
+    
+    // Log the request
+    error_log('NDS Bulk Delete - IDs received: ' . print_r($ids, true));
+    
     if (!is_array($ids) || empty($ids)) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=invalid_ids'));
+        error_log('NDS Bulk Delete - Invalid IDs: not an array or empty');
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=invalid_ids'));
         exit;
     }
 
     $deleted_count = 0;
+    $failed_count = 0;
     foreach ($ids as $id) {
         $id = intval($id);
         if ($id > 0) {
-            // nds_delete_student() handles FK constraints:
-            // soft-deletes students with enrollments, hard-deletes the rest.
-            if (function_exists('nds_delete_student')) {
-                $ok = nds_delete_student($id);
-            } else {
-                global $wpdb;
-                $ok = ($wpdb->delete($wpdb->prefix . 'nds_students', ['id' => $id], ['%d']) !== false);
-            }
-            if ($ok) {
+            $result = $wpdb->delete($students_table, ['id' => $id], ['%d']);
+            if ($result !== false) {
                 $deleted_count++;
+                error_log("NDS Bulk Delete - Deleted learner ID: {$id}");
+            } else {
+                $failed_count++;
+                error_log("NDS Bulk Delete - Failed to delete learner ID: {$id}. Error: " . $wpdb->last_error);
             }
         }
     }
 
-    wp_redirect(admin_url('admin.php?page=nds-students&success=bulk_delete&count=' . $deleted_count));
+    error_log("NDS Bulk Delete - Complete. Deleted: {$deleted_count}, Failed: {$failed_count}");
+    wp_redirect(admin_url('admin.php?page=nds-all-learners&success=bulk_delete&count=' . $deleted_count));
     exit;
 }
 
@@ -1057,12 +1061,12 @@ function nds_handle_bulk_status_change() {
 
     // Verify nonce
     if (!isset($_POST['nds_bulk_nonce']) || !wp_verify_nonce($_POST['nds_bulk_nonce'], 'nds_bulk_action')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=security_check_failed'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=security_check_failed'));
         exit;
     }
 
     if (!isset($_POST['learner_ids']) || !isset($_POST['new_status'])) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=missing_params'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=missing_params'));
         exit;
     }
 
@@ -1077,13 +1081,13 @@ function nds_handle_bulk_status_change() {
     $allowed_statuses = ['active', 'prospect', 'inactive', 'graduated', 'alumni', 'withdrawn'];
     if (!in_array($new_status, $allowed_statuses)) {
         error_log("NDS Bulk Status Change - Invalid status: {$new_status}");
-        wp_redirect(admin_url('admin.php?page=nds-students&error=invalid_status'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=invalid_status'));
         exit;
     }
 
     if (!is_array($ids) || empty($ids)) {
         error_log('NDS Bulk Status Change - Invalid IDs: not an array or empty');
-        wp_redirect(admin_url('admin.php?page=nds-students&error=invalid_ids'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=invalid_ids'));
         exit;
     }
 
@@ -1110,7 +1114,7 @@ function nds_handle_bulk_status_change() {
     }
 
     error_log("NDS Bulk Status Change - Complete. Updated: {$updated_count}, Failed: {$failed_count}");
-    wp_redirect(admin_url('admin.php?page=nds-students&success=bulk_status&status=' . $new_status . '&count=' . $updated_count));
+    wp_redirect(admin_url('admin.php?page=nds-all-learners&success=bulk_status&status=' . $new_status . '&count=' . $updated_count));
     exit;
 }
 
@@ -1127,17 +1131,16 @@ function nds_handle_bulk_status_change() {
  */
 function nds_handle_bulk_revert_learners_to_applicants_impl() {
     if (!current_user_can('manage_options')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=unauthorized'));
-        exit;
+        wp_die('Unauthorized access');
     }
 
     if (!isset($_POST['nds_bulk_nonce']) || !wp_verify_nonce($_POST['nds_bulk_nonce'], 'nds_bulk_action')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=security_check_failed'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=security_check_failed'));
         exit;
     }
 
     if (!isset($_POST['learner_ids'])) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=no_ids'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=no_ids'));
         exit;
     }
 
@@ -1150,7 +1153,7 @@ function nds_handle_bulk_revert_learners_to_applicants_impl() {
     $ids = json_decode(stripslashes($ids_raw), true);
 
     if (!is_array($ids) || empty($ids)) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=invalid_ids'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=invalid_ids'));
         exit;
     }
 
@@ -1208,49 +1211,47 @@ function nds_handle_bulk_revert_learners_to_applicants_impl() {
         }
     }
 
-    wp_redirect(admin_url('admin.php?page=nds-students&success=bulk_delete&count=' . $reverted_count));
+    wp_redirect(admin_url('admin.php?page=nds-all-learners&success=bulk_delete&count=' . $reverted_count));
     exit;
 }
 
 add_action('admin_post_nds_delete_learner', 'nds_handle_delete_learner');
 function nds_handle_delete_learner() {
     if (!current_user_can('manage_options')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=unauthorized'));
-        exit;
+        wp_die('Unauthorized access');
     }
 
     // Verify nonce
     if (!isset($_POST['nds_delete_nonce']) || !wp_verify_nonce($_POST['nds_delete_nonce'], 'nds_delete_learner')) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=security_check_failed'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=security_check_failed'));
         exit;
     }
 
     if (!isset($_POST['learner_id'])) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=no_id'));
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=no_id'));
         exit;
     }
 
+    global $wpdb;
+    $students_table = $wpdb->prefix . 'nds_students';
     $id = intval($_POST['learner_id']);
-
+    
+    error_log("NDS Delete Learner - ID: {$id}");
+    
     if ($id <= 0) {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=invalid_id'));
+        error_log("NDS Delete Learner - Invalid ID: {$id}");
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=invalid_id'));
         exit;
     }
 
-    // Use nds_delete_student() which handles FK constraints:
-    // soft-deletes (status=inactive) students with enrollments, hard-deletes the rest.
-    if (function_exists('nds_delete_student')) {
-        $result = nds_delete_student($id);
+    $result = $wpdb->delete($students_table, ['id' => $id], ['%d']);
+    
+    if ($result !== false) {
+        error_log("NDS Delete Learner - Successfully deleted learner ID: {$id}");
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&success=deleted'));
     } else {
-        global $wpdb;
-        $result = $wpdb->delete($wpdb->prefix . 'nds_students', ['id' => $id], ['%d']);
-        $result = ($result !== false);
-    }
-
-    if ($result) {
-        wp_redirect(admin_url('admin.php?page=nds-students&success=deleted'));
-    } else {
-        wp_redirect(admin_url('admin.php?page=nds-students&error=delete_failed'));
+        error_log("NDS Delete Learner - Failed to delete learner ID: {$id}. Error: " . $wpdb->last_error);
+        wp_redirect(admin_url('admin.php?page=nds-all-learners&error=delete_failed'));
     }
     exit;
 }

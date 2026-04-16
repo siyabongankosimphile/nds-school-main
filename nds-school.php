@@ -59,6 +59,11 @@ add_filter('wp_authenticate_user', function ($user, $password) {
         return $user;
     }
 
+    // Never block privileged admin logins based on legacy password strength.
+    if ($user instanceof WP_User && user_can($user, 'manage_options')) {
+        return $user;
+    }
+
     if (!is_string($password) || $password === '') {
         return $user;
     }
@@ -433,7 +438,10 @@ include_once plugin_dir_path(__FILE__) . 'includes/admin-menu.php';
 include_once plugin_dir_path(__FILE__) . 'includes/admin-pages.php';
 include_once plugin_dir_path(__FILE__) . 'includes/rooms-management.php';
 include_once plugin_dir_path(__FILE__) . 'includes/seed.php';
-include_once plugin_dir_path(__FILE__) . 'includes/migrate-to-university-schema.php';
+$migration_schema_file = plugin_dir_path(__FILE__) . 'includes/migrate-to-university-schema.php';
+if (file_exists($migration_schema_file)) {
+    include_once $migration_schema_file;
+}
 include_once plugin_dir_path(__FILE__) . 'includes/hero-carousel.php';
 include_once plugin_dir_path(__FILE__) . 'includes/hero-carousel-admin.php';
 include_once plugin_dir_path(__FILE__) . 'includes/application-functions.php';
@@ -1004,23 +1012,13 @@ add_action('wp_ajax_nds_portal_registration_action', function () {
             wp_send_json_error('Please select at least one module.');
         }
 
-        // Allow modules from this course or any course under the accepted program.
+        // Only allow modules belonging to this accepted course.
         $placeholders = implode(',', array_fill(0, count($module_ids), '%d'));
-        if ($app_program_id > 0) {
-            $params = array_merge(array($app_program_id), $module_ids);
-            $valid_ids = $wpdb->get_col($wpdb->prepare(
-                "SELECT m.id FROM {$modules_table} m
-                 INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
-                 WHERE c.program_id = %d AND m.id IN ({$placeholders})",
-                $params
-            ));
-        } else {
-            $params = array_merge(array($course_id), $module_ids);
-            $valid_ids = $wpdb->get_col($wpdb->prepare(
-                "SELECT id FROM {$modules_table} WHERE course_id = %d AND id IN ({$placeholders})",
-                $params
-            ));
-        }
+        $params = array_merge(array($course_id), $module_ids);
+        $valid_ids = $wpdb->get_col($wpdb->prepare(
+            "SELECT id FROM {$modules_table} WHERE course_id = %d AND id IN ({$placeholders})",
+            $params
+        ));
         $valid_ids = array_values(array_map('intval', $valid_ids));
 
         if (empty($valid_ids)) {
@@ -2041,6 +2039,18 @@ add_action('wp_enqueue_scripts', function () {
         );
     }
 
+    // Shared Portal Layout CSS (same shell behavior as learner portal)
+    $layout_css = plugin_dir_path(__FILE__) . 'assets/css/student-portal-layout.css';
+    if (file_exists($layout_css)) {
+        wp_enqueue_style(
+            'nds-staff-portal-layout',
+            plugin_dir_url(__FILE__) . 'assets/css/student-portal-layout.css',
+            array('nds-staff-portal-frontend', 'nds-staff-portal-styles'),
+            filemtime($layout_css),
+            'all'
+        );
+    }
+
     // Icons for the dashboard
     wp_enqueue_style(
         'nds-staff-portal-icons',
@@ -2158,6 +2168,231 @@ function nds_portal_get_current_staff_id() {
     
     return $staff_id ?: 0;
 }
+
+function nds_portal_build_redirect_url($portal_path, $tab, array $query_args = array()) {
+    $base_url = home_url($portal_path);
+    if (!empty($tab) && $tab !== 'overview') {
+        $base_url = add_query_arg('tab', $tab, $base_url);
+    }
+
+    if (!empty($query_args)) {
+        $base_url = add_query_arg($query_args, $base_url);
+    }
+
+    return $base_url;
+}
+
+function nds_portal_validate_profile_password_change(WP_User $user, array $request_data) {
+    $current_password = isset($request_data['current_password']) ? (string) $request_data['current_password'] : '';
+    $new_password = isset($request_data['new_password']) ? (string) $request_data['new_password'] : '';
+    $confirm_password = isset($request_data['confirm_password']) ? (string) $request_data['confirm_password'] : '';
+
+    if ($current_password === '' && $new_password === '' && $confirm_password === '') {
+        return array('should_update' => false);
+    }
+
+    if ($current_password === '' || $new_password === '' || $confirm_password === '') {
+        return new WP_Error('missing_password_fields', 'Complete all password fields to change your password.');
+    }
+
+    if (!wp_check_password($current_password, $user->user_pass, $user->ID)) {
+        return new WP_Error('invalid_current_password', 'Your current password is incorrect.');
+    }
+
+    if (!nds_is_strong_password($new_password)) {
+        return new WP_Error('weak_password', nds_get_password_policy_message());
+    }
+
+    if ($new_password !== $confirm_password) {
+        return new WP_Error('password_mismatch', 'New password and confirmation do not match.');
+    }
+
+    return array(
+        'should_update' => true,
+        'new_password' => $new_password,
+    );
+}
+
+function nds_portal_sync_wp_user_profile(WP_User $user, array $profile_data) {
+    $user_email = isset($profile_data['email']) ? sanitize_email($profile_data['email']) : $user->user_email;
+    if (empty($user_email) || !is_email($user_email)) {
+        return new WP_Error('invalid_email', 'Please enter a valid email address.');
+    }
+
+    $existing_user = get_user_by('email', $user_email);
+    if ($existing_user && (int) $existing_user->ID !== (int) $user->ID) {
+        return new WP_Error('email_exists', 'That email address is already used by another account.');
+    }
+
+    $first_name = isset($profile_data['first_name']) ? sanitize_text_field($profile_data['first_name']) : '';
+    $last_name = isset($profile_data['last_name']) ? sanitize_text_field($profile_data['last_name']) : '';
+
+    $user_args = array(
+        'ID' => $user->ID,
+        'user_email' => $user_email,
+        'first_name' => $first_name,
+        'last_name' => $last_name,
+        'display_name' => trim($first_name . ' ' . $last_name),
+    );
+
+    $password_result = nds_portal_validate_profile_password_change($user, $profile_data);
+    if (is_wp_error($password_result)) {
+        return $password_result;
+    }
+
+    if (!empty($password_result['should_update'])) {
+        $user_args['user_pass'] = $password_result['new_password'];
+    }
+
+    $updated_user_id = wp_update_user($user_args);
+    if (is_wp_error($updated_user_id)) {
+        return $updated_user_id;
+    }
+
+    if (!empty($password_result['should_update'])) {
+        wp_set_current_user($user->ID);
+        wp_set_auth_cookie($user->ID, true);
+    }
+
+    return array(
+        'email' => $user_email,
+        'password_updated' => !empty($password_result['should_update']),
+    );
+}
+
+function nds_portal_handle_student_profile_update() {
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    if (!isset($_POST['nds_student_profile_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_student_profile_nonce'])), 'nds_student_profile_action')) {
+        wp_die('Security check failed.');
+    }
+
+    $student_id = function_exists('nds_portal_get_current_student_id') ? (int) nds_portal_get_current_student_id() : 0;
+    $user = wp_get_current_user();
+    if ($student_id <= 0 || !$user || !$user->exists()) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/portal/', 'profile', array('profile_error' => rawurlencode('Student profile not found.'))));
+        exit;
+    }
+
+    global $wpdb;
+    $student_table = $wpdb->prefix . 'nds_students';
+
+    $profile_data = array(
+        'first_name' => isset($_POST['first_name']) ? sanitize_text_field(wp_unslash($_POST['first_name'])) : '',
+        'last_name' => isset($_POST['last_name']) ? sanitize_text_field(wp_unslash($_POST['last_name'])) : '',
+        'email' => isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '',
+        'phone' => isset($_POST['phone']) ? sanitize_text_field(wp_unslash($_POST['phone'])) : '',
+        'address' => isset($_POST['address']) ? sanitize_textarea_field(wp_unslash($_POST['address'])) : '',
+        'city' => isset($_POST['city']) ? sanitize_text_field(wp_unslash($_POST['city'])) : '',
+        'country' => isset($_POST['country']) ? sanitize_text_field(wp_unslash($_POST['country'])) : 'South Africa',
+        'date_of_birth' => isset($_POST['date_of_birth']) ? sanitize_text_field(wp_unslash($_POST['date_of_birth'])) : '',
+        'gender' => isset($_POST['gender']) ? sanitize_text_field(wp_unslash($_POST['gender'])) : '',
+        'profile_photo' => isset($_POST['profile_photo']) ? esc_url_raw(wp_unslash($_POST['profile_photo'])) : '',
+        'current_password' => isset($_POST['current_password']) ? (string) wp_unslash($_POST['current_password']) : '',
+        'new_password' => isset($_POST['new_password']) ? (string) wp_unslash($_POST['new_password']) : '',
+        'confirm_password' => isset($_POST['confirm_password']) ? (string) wp_unslash($_POST['confirm_password']) : '',
+    );
+
+    if ($profile_data['first_name'] === '' || $profile_data['last_name'] === '' || $profile_data['email'] === '') {
+        wp_safe_redirect(nds_portal_build_redirect_url('/portal/', 'profile', array('profile_error' => rawurlencode('First name, last name, and email are required.'))));
+        exit;
+    }
+
+    $user_sync = nds_portal_sync_wp_user_profile($user, $profile_data);
+    if (is_wp_error($user_sync)) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/portal/', 'profile', array('profile_error' => rawurlencode($user_sync->get_error_message()))));
+        exit;
+    }
+
+    $student_update = array(
+        'first_name' => $profile_data['first_name'],
+        'last_name' => $profile_data['last_name'],
+        'email' => $user_sync['email'],
+        'phone' => $profile_data['phone'],
+        'address' => $profile_data['address'],
+        'city' => $profile_data['city'],
+        'country' => $profile_data['country'],
+        'date_of_birth' => $profile_data['date_of_birth'] ?: null,
+        'gender' => $profile_data['gender'],
+        'profile_photo' => $profile_data['profile_photo'],
+    );
+
+    $wpdb->update($student_table, $student_update, array('id' => $student_id));
+
+    $notice = !empty($user_sync['password_updated'])
+        ? 'Profile updated and password changed successfully.'
+        : 'Profile updated successfully.';
+    wp_safe_redirect(nds_portal_build_redirect_url('/portal/', 'profile', array('profile_notice' => rawurlencode($notice))));
+    exit;
+}
+add_action('admin_post_nds_portal_update_student_profile', 'nds_portal_handle_student_profile_update');
+
+function nds_portal_handle_staff_profile_update() {
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    if (!isset($_POST['nds_staff_profile_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_staff_profile_nonce'])), 'nds_staff_profile_action')) {
+        wp_die('Security check failed.');
+    }
+
+    $staff_id = function_exists('nds_portal_get_current_staff_id') ? (int) nds_portal_get_current_staff_id() : 0;
+    $user = wp_get_current_user();
+    if ($staff_id <= 0 || !$user || !$user->exists()) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'profile', array('profile_error' => rawurlencode('Staff profile not found.'))));
+        exit;
+    }
+
+    global $wpdb;
+    $staff_table = $wpdb->prefix . 'nds_staff';
+
+    $profile_data = array(
+        'first_name' => isset($_POST['first_name']) ? sanitize_text_field(wp_unslash($_POST['first_name'])) : '',
+        'last_name' => isset($_POST['last_name']) ? sanitize_text_field(wp_unslash($_POST['last_name'])) : '',
+        'email' => isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '',
+        'phone' => isset($_POST['phone']) ? sanitize_text_field(wp_unslash($_POST['phone'])) : '',
+        'address' => isset($_POST['address']) ? sanitize_textarea_field(wp_unslash($_POST['address'])) : '',
+        'dob' => isset($_POST['dob']) ? sanitize_text_field(wp_unslash($_POST['dob'])) : '',
+        'gender' => isset($_POST['gender']) ? sanitize_text_field(wp_unslash($_POST['gender'])) : '',
+        'profile_picture' => isset($_POST['profile_picture']) ? esc_url_raw(wp_unslash($_POST['profile_picture'])) : '',
+        'current_password' => isset($_POST['current_password']) ? (string) wp_unslash($_POST['current_password']) : '',
+        'new_password' => isset($_POST['new_password']) ? (string) wp_unslash($_POST['new_password']) : '',
+        'confirm_password' => isset($_POST['confirm_password']) ? (string) wp_unslash($_POST['confirm_password']) : '',
+    );
+
+    if ($profile_data['first_name'] === '' || $profile_data['last_name'] === '' || $profile_data['email'] === '') {
+        wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'profile', array('profile_error' => rawurlencode('First name, last name, and email are required.'))));
+        exit;
+    }
+
+    $user_sync = nds_portal_sync_wp_user_profile($user, $profile_data);
+    if (is_wp_error($user_sync)) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'profile', array('profile_error' => rawurlencode($user_sync->get_error_message()))));
+        exit;
+    }
+
+    $staff_update = array(
+        'first_name' => $profile_data['first_name'],
+        'last_name' => $profile_data['last_name'],
+        'email' => $user_sync['email'],
+        'phone' => $profile_data['phone'],
+        'address' => $profile_data['address'],
+        'dob' => $profile_data['dob'] ?: null,
+        'gender' => $profile_data['gender'],
+        'profile_picture' => $profile_data['profile_picture'],
+    );
+
+    $wpdb->update($staff_table, $staff_update, array('id' => $staff_id));
+
+    $notice = !empty($user_sync['password_updated'])
+        ? 'Profile updated and password changed successfully.'
+        : 'Profile updated successfully.';
+    wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'profile', array('profile_notice' => rawurlencode($notice))));
+    exit;
+}
+add_action('admin_post_nds_portal_update_staff_profile', 'nds_portal_handle_staff_profile_update');
 
 /**
  * Public AJAX: register a basic WordPress user for applicants
@@ -2356,86 +2591,199 @@ add_action('wp_ajax_nds_portal_marks', function () {
     wp_send_json_success($rows ?: array());
 });
 
+// Ensure nds_student_documents table exists (lazy creation)
+function nds_ensure_student_documents_table() {
+    global $wpdb;
+    $table = $wpdb->prefix . 'nds_student_documents';
+    $exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    if (!empty($exists)) {
+        return $table;
+    }
+    $charset_collate = $wpdb->get_charset_collate();
+    $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        student_id INT NOT NULL,
+        document_type VARCHAR(100) NOT NULL,
+        document_label VARCHAR(200) NOT NULL,
+        file_name VARCHAR(255) NOT NULL,
+        file_path VARCHAR(500) NOT NULL,
+        file_size INT DEFAULT 0,
+        file_ext VARCHAR(10),
+        uploaded_by INT DEFAULT 0,
+        uploaded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        notes TEXT,
+        INDEX idx_student (student_id),
+        INDEX idx_doc_type (document_type)
+    ) {$charset_collate}";
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta($sql);
+    return $table;
+}
+
 // AJAX handler for uploading learner documents
 add_action('wp_ajax_nds_upload_learner_document', 'nds_upload_learner_document_ajax');
 function nds_upload_learner_document_ajax() {
     if (!is_user_logged_in()) {
         wp_send_json_error('Unauthorized', 401);
     }
-    
-    if (!isset($_POST['nds_upload_document_nonce']) || !wp_verify_nonce($_POST['nds_upload_document_nonce'], 'nds_upload_learner_document')) {
+
+    if (!isset($_POST['nds_upload_document_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_upload_document_nonce'])), 'nds_upload_learner_document')) {
         wp_send_json_error('Security check failed', 403);
     }
-    
+
     $learner_id = isset($_POST['learner_id']) ? intval($_POST['learner_id']) : 0;
     if ($learner_id <= 0) {
         wp_send_json_error('Invalid learner ID');
     }
-    
-    // Verify the logged-in user is linked to this learner (for frontend portal)
+
     $current_student_id = nds_portal_get_current_student_id();
     if ($current_student_id > 0 && $current_student_id !== $learner_id) {
-        // If user is a learner, they can only upload for themselves
         wp_send_json_error('Unauthorized - you can only upload documents for your own account');
     }
-    
-    // For admin users, allow upload for any learner
     if ($current_student_id <= 0 && !current_user_can('manage_options')) {
         wp_send_json_error('Unauthorized');
     }
-    
+
     if (empty($_FILES['document_file']) || $_FILES['document_file']['error'] !== UPLOAD_ERR_OK) {
         wp_send_json_error('No file uploaded or upload error');
     }
-    
+
     $file = $_FILES['document_file'];
     $allowed_extensions = ['pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png'];
     $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
-    
-    if (!in_array($file_ext, $allowed_extensions)) {
+
+    if (!in_array($file_ext, $allowed_extensions, true)) {
         wp_send_json_error('Invalid file type. Allowed: PDF, DOC, DOCX, JPG, PNG');
     }
-    
-    if ($file['size'] > 10 * 1024 * 1024) { // 10MB
+    if ($file['size'] > 10 * 1024 * 1024) {
         wp_send_json_error('File size exceeds 10MB limit');
     }
-    
+
     global $wpdb;
     $learner = nds_get_student($learner_id);
     if (!$learner) {
         wp_send_json_error('Learner not found');
     }
-    
-    $learner_data = (array) $learner;
-    $learner_name = trim(($learner_data['first_name'] ?? '') . ' ' . ($learner_data['last_name'] ?? ''));
-    $current_year = date('Y');
-    
-    // Create student folder structure: /public/Students/{Year}/{student_id}_{name}/
-    $plugin_dir = plugin_dir_path(__FILE__);
-    $student_folder_name = $learner_id . '_' . sanitize_file_name(str_replace(' ', '-', strtolower($learner_name)));
-    $student_base_dir = $plugin_dir . 'public/Students/' . $current_year . '/';
-    $student_upload_dir = $student_base_dir . $student_folder_name . '/';
-    
-    if (!file_exists($student_upload_dir)) {
-        wp_mkdir_p($student_upload_dir);
+
+    $learner_data   = (array) $learner;
+    $learner_name   = trim(($learner_data['first_name'] ?? '') . ' ' . ($learner_data['last_name'] ?? ''));
+    $current_year   = date('Y');
+    $plugin_dir     = plugin_dir_path(__FILE__);
+    $folder_name    = $learner_id . '_' . sanitize_file_name(str_replace(' ', '-', strtolower($learner_name)));
+    $upload_dir     = $plugin_dir . 'public/Students/' . $current_year . '/' . $folder_name . '/';
+
+    if (!file_exists($upload_dir)) {
+        wp_mkdir_p($upload_dir);
     }
-    
-    // Generate unique filename
-    $document_name = isset($_POST['document_name']) ? sanitize_file_name($_POST['document_name']) : 'document';
-    $unique_filename = sanitize_file_name($document_name) . '_' . time() . '_' . uniqid() . '.' . $file_ext;
-    $dest_path = $student_upload_dir . $unique_filename;
-    
+
+    $document_type  = isset($_POST['document_type'])  ? sanitize_key(wp_unslash($_POST['document_type']))         : 'other';
+    $document_label = isset($_POST['document_label']) ? sanitize_text_field(wp_unslash($_POST['document_label'])) : 'Document';
+    $notes          = isset($_POST['document_notes']) ? sanitize_textarea_field(wp_unslash($_POST['document_notes'])) : '';
+
+    $unique_filename = sanitize_file_name($document_type) . '_' . time() . '_' . wp_generate_password(6, false) . '.' . $file_ext;
+    $dest_path       = $upload_dir . $unique_filename;
+
     if (!move_uploaded_file($file['tmp_name'], $dest_path)) {
         wp_send_json_error('Failed to save file');
     }
-    
-    // Store document info in database (you may want to create a documents table)
-    // For now, we'll just return success - you can extend this to store metadata
-    $relative_path = 'Students/' . $current_year . '/' . $student_folder_name . '/' . $unique_filename;
-    
+
+    $relative_path = 'Students/' . $current_year . '/' . $folder_name . '/' . $unique_filename;
+
+    $table = nds_ensure_student_documents_table();
+
+    // Replace any existing record for the same student + document_type
+    $existing = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, file_path FROM {$table} WHERE student_id = %d AND document_type = %s",
+        $learner_id, $document_type
+    ));
+    if ($existing) {
+        // Delete old file
+        $old_file = $plugin_dir . 'public/' . $existing->file_path;
+        if (file_exists($old_file)) {
+            wp_delete_file($old_file);
+        }
+        $wpdb->update(
+            $table,
+            [
+                'document_label' => $document_label,
+                'file_name'      => $unique_filename,
+                'file_path'      => $relative_path,
+                'file_size'      => intval($file['size']),
+                'file_ext'       => $file_ext,
+                'uploaded_by'    => get_current_user_id(),
+                'uploaded_at'    => current_time('mysql'),
+                'notes'          => $notes,
+            ],
+            ['id' => intval($existing->id)],
+            ['%s','%s','%s','%d','%s','%d','%s','%s'],
+            ['%d']
+        );
+        $doc_id = intval($existing->id);
+    } else {
+        $wpdb->insert(
+            $table,
+            [
+                'student_id'     => $learner_id,
+                'document_type'  => $document_type,
+                'document_label' => $document_label,
+                'file_name'      => $unique_filename,
+                'file_path'      => $relative_path,
+                'file_size'      => intval($file['size']),
+                'file_ext'       => $file_ext,
+                'uploaded_by'    => get_current_user_id(),
+                'uploaded_at'    => current_time('mysql'),
+                'notes'          => $notes,
+            ],
+            ['%d','%s','%s','%s','%s','%d','%s','%d','%s','%s']
+        );
+        $doc_id = $wpdb->insert_id;
+    }
+
     wp_send_json_success([
-        'message' => 'Document uploaded successfully',
-        'path' => $relative_path,
-        'filename' => $unique_filename
+        'message'      => 'Document uploaded successfully',
+        'doc_id'       => $doc_id,
+        'path'         => $relative_path,
+        'uploaded_at'  => current_time('mysql'),
     ]);
+}
+
+// AJAX handler for deleting a learner document
+add_action('wp_ajax_nds_delete_learner_document', 'nds_delete_learner_document_ajax');
+function nds_delete_learner_document_ajax() {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+
+    if (!isset($_POST['nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nonce'])), 'nds_delete_learner_document')) {
+        wp_send_json_error('Security check failed', 403);
+    }
+
+    $doc_id = isset($_POST['doc_id']) ? intval($_POST['doc_id']) : 0;
+    if ($doc_id <= 0) {
+        wp_send_json_error('Invalid document ID');
+    }
+
+    global $wpdb;
+    $table = nds_ensure_student_documents_table();
+    $doc   = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$table} WHERE id = %d", $doc_id));
+    if (!$doc) {
+        wp_send_json_error('Document not found');
+    }
+
+    $current_student_id = nds_portal_get_current_student_id();
+    if ($current_student_id > 0 && $current_student_id !== intval($doc->student_id)) {
+        wp_send_json_error('Unauthorized');
+    }
+    if ($current_student_id <= 0 && !current_user_can('manage_options')) {
+        wp_send_json_error('Unauthorized');
+    }
+
+    $file_path = plugin_dir_path(__FILE__) . 'public/' . $doc->file_path;
+    if (file_exists($file_path)) {
+        wp_delete_file($file_path);
+    }
+
+    $wpdb->delete($table, ['id' => $doc_id], ['%d']);
+
+    wp_send_json_success(['message' => 'Document deleted successfully']);
 }

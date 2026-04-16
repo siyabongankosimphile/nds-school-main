@@ -15,20 +15,10 @@ if ($selected_course_id <= 0 && !empty($courses_taught)) {
 $lecturer_course_ids = array_column($courses_taught, 'id');
 $modules_by_course = array();
 if (!empty($lecturer_course_ids)) {
-    $module_table = $wpdb->prefix . 'nds_modules';
-    $module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$module_table}");
-    $module_code_col = in_array('code', $module_columns, true) ? 'code' : (in_array('module_code', $module_columns, true) ? 'module_code' : '');
-    $module_type_col = in_array('type', $module_columns, true) ? 'type' : '';
-    $module_status_col = in_array('status', $module_columns, true) ? 'status' : '';
-
-    $select_code = $module_code_col ? "m.{$module_code_col} AS code" : "'' AS code";
-    $select_type = $module_type_col ? "m.{$module_type_col} AS type" : "'theory' AS type";
-    $select_status = $module_status_col ? "m.{$module_status_col} AS status" : "'active' AS status";
-
     $ids_placeholder = implode(',', array_map('intval', $lecturer_course_ids));
     $all_modules = $wpdb->get_results(
-        "SELECT m.id, m.name, {$select_code}, {$select_type}, {$select_status}, m.course_id
-         FROM {$module_table} m
+        "SELECT m.id, m.name, m.code, m.type, m.status, m.course_id
+         FROM {$wpdb->prefix}nds_modules m
          WHERE m.course_id IN ($ids_placeholder)
          ORDER BY m.course_id ASC, m.id ASC",
         ARRAY_A

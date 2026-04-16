@@ -338,41 +338,35 @@ function nds_delete_staff($staff_id)
 {
     global $wpdb;
     $staff_table = $wpdb->prefix . 'nds_staff';
-    $redirect_url = admin_url('admin.php?page=nds-staff-management');
 
     if (intval($staff_id) > 0) {
         $old = nds_get_staff_by_id($staff_id);
         $deleted = $wpdb->delete($staff_table, ['id' => intval($staff_id)], ['%d']);
         if ($deleted === false) {
-            wp_redirect(add_query_arg('error', urlencode('delete_failed'), $redirect_url));
+            wp_redirect(admin_url('admin.php?page=nds-staff-management&error=' . urlencode('delete_failed')));
             exit;
         }
         // Log delete action
         nds_log_staff_action($staff_id, get_current_user_id(), 'delete_staff', 'delete', wp_json_encode($old), null);
-        wp_redirect(add_query_arg('success', 'staff_deleted', $redirect_url));
+        wp_redirect(admin_url('admin.php?page=nds-staff-management&success=staff_deleted'));
         exit;
     } else {
-        wp_redirect(add_query_arg('error', urlencode('invalid_staff_id'), $redirect_url));
-        exit;
+        wp_die('Invalid staff ID.');
     }
 }
 
 // Secure delete via admin-post
 add_action('admin_post_nds_delete_staff', 'nds_delete_staff_post');
 function nds_delete_staff_post() {
-    $redirect_url = admin_url('admin.php?page=nds-staff-management');
-
     if (!current_user_can('manage_options')) {
-        wp_redirect(add_query_arg('error', urlencode('unauthorized'), $redirect_url));
-        exit;
+        wp_die('Unauthorized');
     }
     if (!isset($_POST['_wpnonce']) || !wp_verify_nonce($_POST['_wpnonce'], 'nds_delete_staff')) {
-        wp_redirect(add_query_arg('error', urlencode('security_check_failed'), $redirect_url));
-        exit;
+        wp_die('Security check failed');
     }
     $staff_id = isset($_POST['staff_id']) ? intval($_POST['staff_id']) : 0;
     if ($staff_id <= 0) {
-        wp_redirect(add_query_arg('error', urlencode('invalid_staff_id'), $redirect_url));
+        wp_redirect(admin_url('admin.php?page=nds-staff-management&error=' . urlencode('invalid_staff_id')));
         exit;
     }
     nds_delete_staff($staff_id);

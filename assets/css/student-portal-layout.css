@@ -29,6 +29,25 @@ body.nds-portal-body {
     padding: 0;
 }
 
+/* Remove theme container spacing that can leave a white strip above the portal */
+body.nds-portal-body #page,
+body.nds-portal-body #content,
+body.nds-portal-body main,
+body.nds-portal-body .site,
+body.nds-portal-body .site-content,
+body.nds-portal-body .content-area,
+body.nds-portal-body .ast-container,
+body.nds-portal-body .ast-plain-container,
+body.nds-portal-body .ast-builder-grid-row,
+body.nds-portal-body .entry-content,
+body.nds-portal-body article,
+body.nds-portal-body .post,
+body.nds-portal-body .entry,
+body.nds-portal-body .hentry {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+
 /* Hide website header/navbar completely on portal */
 body.nds-portal-body header,
 body.nds-portal-body .site-header,
@@ -52,11 +71,74 @@ body.nds-portal-body .header {
     margin-top: 0 !important;
     padding-top: 0 !important;
 }
-body.admin-bar .nds-portal-offset { 
-    margin-top: 32px !important; 
+body.admin-bar .nds-portal-offset {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
 }
-@media screen and (max-width: 782px) {
-    body.admin-bar .nds-portal-offset { 
-        margin-top: 46px !important; 
-    }
+
+/* Keep the admin bar fixed without pushing portal content down */
+body.admin-bar #wpadminbar {
+    position: fixed !important;
+    top: 0 !important;
+}
+
+/* Shared portal design language (student + lecturer) */
+.nds-portal-theme {
+    color: #111827;
+}
+
+.nds-portal-theme .nds-portal-card {
+    background: #fff;
+    border: 1px solid #f1f5f9;
+    border-radius: 0.75rem;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+}
+
+.nds-portal-theme .nds-portal-card:hover {
+    box-shadow: 0 8px 26px rgba(15, 23, 42, 0.07);
+}
+
+.nds-portal-theme .nds-portal-btn {
+    border-radius: 0.5rem;
+    transition: all 0.2s ease;
+}
+
+.nds-portal-theme .nds-portal-btn-primary {
+    background: #2563eb;
+    color: #fff;
+}
+
+.nds-portal-theme .nds-portal-btn-primary:hover {
+    background: #1d4ed8;
+}
+
+.nds-portal-theme .nds-content-area input[type="text"],
+.nds-portal-theme .nds-content-area input[type="number"],
+.nds-portal-theme .nds-content-area input[type="date"],
+.nds-portal-theme .nds-content-area input[type="email"],
+.nds-portal-theme .nds-content-area input[type="search"],
+.nds-portal-theme .nds-content-area select,
+.nds-portal-theme .nds-content-area textarea {
+    border: 1px solid #d1d5db;
+    border-radius: 0.5rem;
+    background: #fff;
+}
+
+.nds-portal-theme .nds-content-area input:focus,
+.nds-portal-theme .nds-content-area select:focus,
+.nds-portal-theme .nds-content-area textarea:focus {
+    outline: none;
+    border-color: #3b82f6;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.nds-portal-theme .nds-content-area table thead th {
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+}
+
+.nds-portal-theme .nds-content-area table tbody tr:hover {
+    background: #f9fafb;
 }

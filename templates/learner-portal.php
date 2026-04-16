@@ -10,6 +10,30 @@ if (!defined('ABSPATH')) {
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title><?php echo esc_html(get_bloginfo('name')); ?> — Student Portal</title>
     <?php wp_head(); ?>
+    <style>
+        /* Must come after wp_head() to override WP's inline admin-bar margin injection */
+        html, html.admin-bar {
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+        }
+        body.nds-portal-body,
+        body.nds-portal-body #page,
+        body.nds-portal-body #content,
+        body.nds-portal-body main,
+        body.nds-portal-body .site,
+        body.nds-portal-body .site-content,
+        body.nds-portal-body .ast-container,
+        body.nds-portal-body .ast-plain-container,
+        body.nds-portal-body .ast-builder-grid-row,
+        body.nds-portal-body .ast-site-content-wrap,
+        body.nds-portal-body .content-area,
+        body.nds-portal-body article,
+        body.nds-portal-body .hentry,
+        body.nds-portal-body .entry-content {
+            margin-top: 0 !important;
+            padding-top: 0 !important;
+        }
+    </style>
 </head>
 <body <?php body_class('nds-portal-body'); ?>>
 <?php function_exists('wp_body_open') && wp_body_open(); ?>
@@ -17,12 +41,21 @@ if (!defined('ABSPATH')) {
 
 global $wpdb;
 
+$courses_table = $wpdb->prefix . 'nds_courses';
 $modules_table = $wpdb->prefix . 'nds_modules';
-$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}");
-$module_code_col = in_array('code', $module_columns, true) ? 'code' : (in_array('module_code', $module_columns, true) ? 'module_code' : '');
-$module_type_col = in_array('type', $module_columns, true) ? 'type' : '';
-$module_code_select = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
-$module_type_select = $module_type_col ? "m.{$module_type_col} AS type" : "'' AS type";
+$student_modules_table = $wpdb->prefix . 'nds_student_modules';
+
+$course_columns = $wpdb->get_col("SHOW COLUMNS FROM {$courses_table}", 0);
+$course_code_col = in_array('code', $course_columns, true)
+    ? 'code'
+    : (in_array('course_code', $course_columns, true) ? 'course_code' : null);
+$course_code_expr = $course_code_col ? "c.{$course_code_col} AS course_code" : "'' AS course_code";
+
+$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}", 0);
+$module_code_col = in_array('module_code', $module_columns, true)
+    ? 'module_code'
+    : (in_array('code', $module_columns, true) ? 'code' : null);
+$module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
 
 // Resolve current learner from logged-in user
 $student_id = (int) nds_portal_get_current_student_id();
@@ -64,7 +97,7 @@ if ($student_id <= 0) {
 $enrollments = $wpdb->get_results(
     $wpdb->prepare(
         "
-        SELECT e.*, c.name as course_name, c.code as course_code,
+        SELECT e.*, c.name as course_name, {$course_code_expr},
                p.id as program_id, p.name as program_name,
                ay.year_name, s.semester_name
         FROM {$wpdb->prefix}nds_student_enrollments e
@@ -232,10 +265,10 @@ if ($can_show_registration_panel) {
     // Fetch modules linked directly to the course
     if ($registration_course_id > 0) {
         $registration_modules = $wpdb->get_results($wpdb->prepare(
-            "SELECT m.id, {$module_code_select}, m.name, {$module_type_select}
-             FROM {$modules_table} m
-             WHERE m.course_id = %d
-             ORDER BY m.name ASC",
+            "SELECT m.id, {$module_code_expr}, m.name, m.type
+             FROM {$wpdb->prefix}nds_modules m
+             WHERE course_id = %d
+             ORDER BY name ASC",
             $registration_course_id
         ), ARRAY_A);
     }
@@ -243,8 +276,8 @@ if ($can_show_registration_panel) {
     // Fallback: if no direct modules, pull modules from ALL courses in the program
     if (empty($registration_modules) && $registration_program_id > 0) {
         $registration_modules = $wpdb->get_results($wpdb->prepare(
-            "SELECT m.id, {$module_code_select}, m.name, {$module_type_select}
-             FROM {$modules_table} m
+            "SELECT m.id, {$module_code_expr}, m.name, m.type
+             FROM {$wpdb->prefix}nds_modules m
              INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
              WHERE c.program_id = %d AND c.status = 'active'
              ORDER BY m.name ASC",
@@ -288,42 +321,92 @@ $module_content_by_module = array();
 $module_assessments_by_module = array();
 
 if ($student_id > 0) {
+    if (function_exists('nds_portal_ensure_student_modules_table')) {
+        $student_modules_table = nds_portal_ensure_student_modules_table();
+    }
+    $student_modules_exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $student_modules_table));
+
     if ($active_year_id > 0 && $active_semester_id > 0) {
-        $learner_registered_modules = $wpdb->get_results($wpdb->prepare(
-            "SELECT sm.module_id, sm.course_id,
-                    m.name AS module_name, {$module_code_select},
-                    c.name AS course_name, c.code AS course_code,
-                    p.name AS program_name
-             FROM {$wpdb->prefix}nds_student_modules sm
-             INNER JOIN {$modules_table} m ON m.id = sm.module_id
-             LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = sm.course_id
-             LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
-             WHERE sm.student_id = %d
-               AND sm.academic_year_id = %d
-               AND sm.semester_id = %d
-               AND sm.status = 'enrolled'
-             ORDER BY p.name ASC, c.name ASC, m.name ASC",
-            $student_id,
-            $active_year_id,
-            $active_semester_id
-        ), ARRAY_A);
+        if (!empty($student_modules_exists)) {
+            $learner_registered_modules = $wpdb->get_results($wpdb->prepare(
+                "SELECT sm.module_id, sm.course_id,
+                        m.name AS module_name, {$module_code_expr},
+                        c.name AS course_name, {$course_code_expr},
+                        p.name AS program_name
+                 FROM {$student_modules_table} sm
+                 INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = sm.module_id
+                 LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = sm.course_id
+                 LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
+                 WHERE sm.student_id = %d
+                   AND sm.academic_year_id = %d
+                   AND sm.semester_id = %d
+                   AND (sm.status IN ('enrolled','active','registered') OR sm.status IS NULL)
+                 ORDER BY p.name ASC, c.name ASC, m.name ASC",
+                $student_id,
+                $active_year_id,
+                $active_semester_id
+            ), ARRAY_A);
+        }
     }
 
     if (empty($learner_registered_modules)) {
-        $learner_registered_modules = $wpdb->get_results($wpdb->prepare(
-            "SELECT sm.module_id, sm.course_id,
-                    m.name AS module_name, {$module_code_select},
-                    c.name AS course_name, c.code AS course_code,
-                    p.name AS program_name
-             FROM {$wpdb->prefix}nds_student_modules sm
-             INNER JOIN {$modules_table} m ON m.id = sm.module_id
-             LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = sm.course_id
-             LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
-             WHERE sm.student_id = %d
-               AND sm.status = 'enrolled'
-             ORDER BY sm.updated_at DESC, p.name ASC, c.name ASC, m.name ASC",
-            $student_id
-        ), ARRAY_A);
+        if (!empty($student_modules_exists)) {
+            $learner_registered_modules = $wpdb->get_results($wpdb->prepare(
+                "SELECT sm.module_id, sm.course_id,
+                        m.name AS module_name, {$module_code_expr},
+                        c.name AS course_name, {$course_code_expr},
+                        p.name AS program_name
+                 FROM {$student_modules_table} sm
+                 INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = sm.module_id
+                 LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = sm.course_id
+                 LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
+                 WHERE sm.student_id = %d
+                   AND (sm.status IN ('enrolled','active','registered') OR sm.status IS NULL)
+                 ORDER BY sm.updated_at DESC, p.name ASC, c.name ASC, m.name ASC",
+                $student_id
+            ), ARRAY_A);
+        }
+    }
+
+    // Fallback: derive modules from enrolled courses when module registrations are missing.
+    if (empty($learner_registered_modules)) {
+        if ($active_year_id > 0 && $active_semester_id > 0) {
+            $learner_registered_modules = $wpdb->get_results($wpdb->prepare(
+                "SELECT DISTINCT m.id AS module_id, m.course_id,
+                        m.name AS module_name, {$module_code_expr},
+                        c.name AS course_name, {$course_code_expr},
+                        p.name AS program_name
+                 FROM {$wpdb->prefix}nds_student_enrollments e
+                 INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = e.course_id
+                 INNER JOIN {$wpdb->prefix}nds_modules m ON m.course_id = c.id
+                 LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
+                 WHERE e.student_id = %d
+                   AND e.academic_year_id = %d
+                   AND e.semester_id = %d
+                   AND e.status IN ('enrolled','applied','waitlisted')
+                 ORDER BY p.name ASC, c.name ASC, m.name ASC",
+                $student_id,
+                $active_year_id,
+                $active_semester_id
+            ), ARRAY_A);
+        }
+
+        if (empty($learner_registered_modules)) {
+            $learner_registered_modules = $wpdb->get_results($wpdb->prepare(
+                "SELECT DISTINCT m.id AS module_id, m.course_id,
+                        m.name AS module_name, {$module_code_expr},
+                        c.name AS course_name, {$course_code_expr},
+                        p.name AS program_name
+                 FROM {$wpdb->prefix}nds_student_enrollments e
+                 INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = e.course_id
+                 INNER JOIN {$wpdb->prefix}nds_modules m ON m.course_id = c.id
+                 LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
+                 WHERE e.student_id = %d
+                   AND e.status IN ('enrolled','applied','waitlisted')
+                 ORDER BY e.updated_at DESC, p.name ASC, c.name ASC, m.name ASC",
+                $student_id
+            ), ARRAY_A);
+        }
     }
 
     $module_ids_for_feed = array_values(array_unique(array_map('intval', wp_list_pluck($learner_registered_modules, 'module_id'))));
@@ -406,7 +489,7 @@ if ($is_applicant && !empty($latest_application)) {
 $current_tab = isset($_GET['tab']) ? sanitize_text_field(wp_unslash($_GET['tab'])) : 'overview';
 $valid_tabs  = $is_applicant
     ? array('overview')
-    : array('overview', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity');
+    : array('overview', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity', 'profile');
 if (!in_array($current_tab, $valid_tabs, true)) {
     $current_tab = 'overview';
 }
@@ -426,7 +509,7 @@ $unread_notifications = nds_get_unread_notifications($student_id);
 $unread_count = count($unread_notifications);
 ?>
 
-<div class="nds-tailwind-wrapper bg-gray-50 min-h-screen nds-portal-offset" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+<div class="nds-tailwind-wrapper bg-gray-50 min-h-screen nds-portal-offset nds-portal-theme" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
     <?php
     // Show success modal if redirected from application form and we have an application record
     $show_success_modal = isset($_GET['application'], $_GET['id'])
@@ -628,6 +711,11 @@ $unread_count = count($unread_notifications);
                        class="inline-flex items-center px-4 py-2 rounded-lg border border-gray-300 bg-white hover:bg-gray-50 text-gray-700 text-sm font-medium shadow-sm transition-all duration-200">
                         <i class="fas fa-globe mr-2"></i>
                         Go to website
+                    </a>
+                    <a href="<?php echo esc_url(nds_learner_portal_tab_url('profile')); ?>"
+                       class="inline-flex items-center px-4 py-2 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm font-medium shadow-sm transition-all duration-200">
+                        <i class="fas fa-user-cog mr-2"></i>
+                        Profile
                     </a>
                     <a href="<?php echo esc_url(wp_logout_url(home_url('/'))); ?>"
                        class="inline-flex items-center px-4 py-2 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-sm font-medium shadow-sm transition-all duration-200">
@@ -869,7 +957,7 @@ $unread_count = count($unread_notifications);
             </div>
 
             <!-- Tab Content -->
-            <div class="p-6">
+            <div class="p-6 nds-content-area">
                 <?php
                 // Set learner_id for partials (they expect $_GET['id'], but we'll override)
                 $_GET['id'] = $student_id;
@@ -1432,6 +1520,10 @@ $unread_count = count($unread_notifications);
 
                     case 'activity':
                         include plugin_dir_path(__FILE__) . '../includes/partials/learner-dashboard-activity.php';
+                        break;
+
+                    case 'profile':
+                        include plugin_dir_path(__FILE__) . '../includes/partials/learner-dashboard-profile.php';
                         break;
 
                     default:

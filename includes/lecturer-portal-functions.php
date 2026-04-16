@@ -43,23 +43,6 @@ function nds_staff_course_is_owned_by_lecturer($staff_id, $course_id) {
     return in_array((int) $course_id, $course_ids, true);
 }
 
-function nds_staff_has_lecturer_permissions($staff_role) {
-    $role = strtolower(trim((string) $staff_role));
-    if ($role === '') {
-        return false;
-    }
-
-    // Support common role labels used in this project and legacy data.
-    $keywords = array('lecturer', 'instructor', 'teacher', 'chef', 'trainer', 'tutor');
-    foreach ($keywords as $keyword) {
-        if (strpos($role, $keyword) !== false) {
-            return true;
-        }
-    }
-
-    return false;
-}
-
 function nds_staff_require_lecturer() {
     if (!is_user_logged_in()) {
         wp_die('Unauthorized');
@@ -76,7 +59,7 @@ function nds_staff_require_lecturer() {
         $staff_id
     ));
 
-    if (!nds_staff_has_lecturer_permissions($role) && !current_user_can('manage_options')) {
+    if (strtolower(trim($role)) !== 'lecturer' && !current_user_can('manage_options')) {
         wp_die('Only lecturers can perform this action.');
     }
 

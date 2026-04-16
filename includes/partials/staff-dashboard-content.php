@@ -13,17 +13,12 @@ $error = isset($_GET['content_error']) ? sanitize_text_field(wp_unslash($_GET['c
 
 $course_ids = function_exists('nds_staff_get_lecturer_course_ids') ? nds_staff_get_lecturer_course_ids($staff_id) : array();
 $modules_for_form = array();
-$module_table = $wpdb->prefix . 'nds_modules';
-$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$module_table}");
-$module_code_col = in_array('code', $module_columns, true) ? 'code' : (in_array('module_code', $module_columns, true) ? 'module_code' : '');
 if (!empty($course_ids)) {
-    $select_module_code = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
-
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results(
         $wpdb->prepare(
-            "SELECT m.id, m.name, {$select_module_code}, c.id AS course_id, c.name AS course_name
-             FROM {$module_table} m
+            "SELECT m.id, m.name, m.code AS module_code, c.id AS course_id, c.name AS course_name
+             FROM {$wpdb->prefix}nds_modules m
              INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
              WHERE m.course_id IN ($placeholders)
              ORDER BY c.name ASC, m.name ASC",
@@ -47,10 +42,10 @@ $courses_for_form = $wpdb->get_results(
 
 $items = $wpdb->get_results(
     $wpdb->prepare(
-        "SELECT lc.*, c.name AS course_name, m.name AS module_name, " . ($module_code_col ? "m.{$module_code_col}" : "''") . " AS module_code
+        "SELECT lc.*, c.name AS course_name, m.name AS module_name, m.code AS module_code
          FROM {$content_table} lc
          LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = lc.course_id
-         LEFT JOIN {$module_table} m ON m.id = lc.module_id
+         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = lc.module_id
          WHERE lc.staff_id = %d
          ORDER BY lc.created_at DESC
          LIMIT 50",
@@ -207,7 +202,7 @@ $type_labels = array(
                             <div id="nds-q-card"></div>
 
                             <!-- Prev / Next navigation -->
-                            <div id="nds-q-nav" class="flex items-center justify-between mt-4 pt-3 border-t border-indigo-200" style="display:none">
+                            <div id="nds-q-nav" class="hidden flex items-center justify-between mt-4 pt-3 border-t border-indigo-200">
                                 <button type="button" id="nds-prev-btn" onclick="ndsNavQ(-1)" class="flex items-center gap-1 px-3 py-1.5 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed">&larr; Previous</button>
                                 <span id="nds-q-counter" class="text-xs text-indigo-500 font-medium"></span>
                                 <button type="button" id="nds-next-btn" onclick="ndsNavQ(1)" class="flex items-center gap-1 px-3 py-1.5 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed">Next &rarr;</button>
@@ -516,12 +511,12 @@ document.addEventListener('DOMContentLoaded', function() {
         if (!ndsQ.length) {
             tabsEl.innerHTML = '';
             if (emptyEl) { emptyEl.style.display = ''; tabsEl.appendChild(emptyEl); }
-            if (navEl) { navEl.classList.add('hidden'); navEl.classList.remove('flex'); navEl.style.display = 'none'; }
+            if (navEl) navEl.classList.add('hidden');
             return;
         }
 
         if (emptyEl) emptyEl.style.display = 'none';
-        if (navEl) { navEl.classList.remove('hidden'); navEl.classList.add('flex'); navEl.style.display = ''; }
+        if (navEl) navEl.classList.remove('hidden');
 
         var h = '';
         ndsQ.forEach(function (q, idx) {

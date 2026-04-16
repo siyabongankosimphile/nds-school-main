@@ -6,12 +6,6 @@ if (!defined('ABSPATH')) {
 ?>
 
 <div class="space-y-6">
-    <!-- Welcome Section -->
-    <div class="bg-gradient-to-r from-blue-600 to-blue-800 rounded-lg shadow-lg p-8 text-white">
-        <h2 class="text-3xl font-bold mb-2">Welcome back, <?php echo esc_html($staff_data['first_name'] ?? 'Staff'); ?>!</h2>
-        <p class="text-blue-100 text-lg">Here's your teaching overview for this term.</p>
-    </div>
-
     <!-- Quick Stats -->
     <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
         <!-- Total Students -->

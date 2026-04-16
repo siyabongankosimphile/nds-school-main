@@ -188,14 +188,9 @@ function nds_content_management_page() {
                                                     <a href="<?php echo admin_url('admin.php?page=nds-add-recipe&edit_recipe=' . $recipe['id']); ?>" class="text-indigo-600 hover:text-indigo-800 text-xs transition-colors p-1.5 rounded hover:bg-indigo-50" title="Edit">
                                                         <i class="fas fa-edit"></i>
                                                     </a>
-                                                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="inline" onsubmit="return confirm('Are you sure you want to delete this recipe?');">
-                                                        <input type="hidden" name="action" value="recipes_delete_recipe">
-                                                        <input type="hidden" name="recipe_id" value="<?php echo esc_attr($recipe['id']); ?>">
-                                                        <?php wp_nonce_field('nds_delete_recipe_nonce_action', 'nds_delete_recipe_nonce'); ?>
-                                                        <button type="submit" class="text-red-600 hover:text-red-800 text-xs transition-colors p-1.5 rounded hover:bg-red-50" title="Delete">
-                                                            <i class="fas fa-trash-alt"></i>
-                                                        </button>
-                                                    </form>
+                                                    <a href="#" class="text-red-600 hover:text-red-800 text-xs transition-colors p-1.5 rounded hover:bg-red-50" title="Delete" onclick="return confirm('Are you sure you want to delete this recipe?')">
+                                                        <i class="fas fa-trash-alt"></i>
+                                                    </a>
                                                 </div>
                                             </div>
 

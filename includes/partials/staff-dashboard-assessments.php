@@ -8,17 +8,12 @@ global $wpdb;
 $course_ids = isset($course_ids) && is_array($course_ids) ? array_values(array_map('intval', $course_ids)) : array();
 $selected_assessment_id = isset($_GET['assessment_id']) ? (int) $_GET['assessment_id'] : 0;
 
-$module_table = $wpdb->prefix . 'nds_modules';
-$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$module_table}");
-$module_code_col = in_array('code', $module_columns, true) ? 'code' : (in_array('module_code', $module_columns, true) ? 'module_code' : '');
-$select_module_code = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
-
 $modules_for_form = array();
 if (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results($wpdb->prepare(
-        "SELECT m.id, m.name, {$select_module_code}, m.course_id, c.name AS course_name
-         FROM {$module_table} m
+        "SELECT m.id, m.name, m.code AS module_code, m.course_id, c.name AS course_name
+         FROM {$wpdb->prefix}nds_modules m
          INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
          WHERE m.course_id IN ($placeholders)
          ORDER BY c.name ASC, m.name ASC",
@@ -30,10 +25,10 @@ $assessments = array();
 if (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $assessments = $wpdb->get_results($wpdb->prepare(
-        "SELECT a.*, c.name AS course_name, m.name AS module_name, {$select_module_code}
+        "SELECT a.*, c.name AS course_name, m.name AS module_name, m.code AS module_code
          FROM {$wpdb->prefix}nds_assessments a
          INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
-         LEFT JOIN {$module_table} m ON m.id = a.module_id
+         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
          WHERE a.course_id IN ($placeholders)
          ORDER BY a.created_at DESC",
         $course_ids

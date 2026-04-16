@@ -359,7 +359,7 @@ function nds_staff_dashboard_improved() {
     </div>
 
     <!-- Add Staff Modal -->
-    <div id="addStaffModal" class="fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50 hidden">
+    <div id="addStaffModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
         <div class="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
             <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                 <h3 class="text-xl font-semibold text-gray-900">
@@ -477,7 +477,7 @@ function nds_staff_dashboard_improved() {
                                 <button type="button" id="uploadProfileBtn" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors duration-200">
                                     <i class="fas fa-upload"></i>Upload
                                 </button>
-                                <button type="button" id="removeProfileBtn" class="bg-red-100 hover:bg-red-200 text-red-700 font-medium py-2 px-4 rounded-lg items-center gap-2 transition-colors duration-200 hidden">
+                                <button type="button" id="removeProfileBtn" class="bg-red-100 hover:bg-red-200 text-red-700 font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors duration-200 hidden">
                                     <i class="fas fa-trash-alt"></i>Remove
                                 </button>
                             </div>
@@ -808,7 +808,7 @@ function nds_staff_dashboard_improved() {
                     preview.src = attachment.url;
                     preview.classList.remove('hidden');
                     placeholder.classList.add('hidden');
-                    removeBtn.classList.remove('hidden'); removeBtn.classList.add('flex');
+                    removeBtn.classList.remove('hidden');
                 });
 
                 mediaUploader.open();
@@ -821,7 +821,7 @@ function nds_staff_dashboard_improved() {
                 preview.src = '';
                 preview.classList.add('hidden');
                 placeholder.classList.remove('hidden');
-                removeBtn.classList.add('hidden'); removeBtn.classList.remove('flex');
+                removeBtn.classList.add('hidden');
             });
         }
     });
