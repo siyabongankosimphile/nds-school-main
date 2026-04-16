@@ -108,7 +108,7 @@ $active_semester = $active_semester_id ? $wpdb->get_row($wpdb->prepare("SELECT *
 
 // Current tab
 $current_tab = isset($_GET['tab']) ? sanitize_text_field(wp_unslash($_GET['tab'])) : 'overview';
-$valid_tabs = array('overview', 'timetable', 'classes', 'marks', 'content', 'assessments', 'gradebook', 'communication', 'reports', 'enrollment', 'structure', 'profile');
+$valid_tabs = array('overview', 'timetable', 'classes', 'marks', 'content', 'assessments', 'gradebook', 'communication', 'reports', 'enrollment', 'structure');
 if (!in_array($current_tab, $valid_tabs, true)) {
     $current_tab = 'overview';
 }
@@ -144,10 +144,6 @@ function nds_staff_portal_tab_url($tab)
                     <a href="<?php echo esc_url(home_url()); ?>" 
                        class="inline-flex items-center px-4 py-2 text-sm font-medium text-gray-700 bg-white border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors">
                         <i class="fas fa-globe mr-2"></i>Go to website
-                    </a>
-                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('profile')); ?>" 
-                       class="inline-flex items-center px-4 py-2 rounded-lg border border-blue-200 bg-blue-50 hover:bg-blue-100 text-blue-700 text-sm font-medium shadow-sm transition-all duration-200">
-                        <i class="fas fa-user-cog mr-2"></i>Profile
                     </a>
                     <a href="<?php echo esc_url(wp_logout_url(home_url())); ?>" 
                        class="inline-flex items-center px-4 py-2 text-sm font-medium text-white bg-red-600 rounded-lg hover:bg-red-700 transition-colors">
@@ -251,10 +247,6 @@ function nds_staff_portal_tab_url($tab)
                    class="<?php echo $current_tab === 'structure' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'; ?> px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center">
                     <i class="fas fa-sitemap mr-2"></i>Structure
                 </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('profile')); ?>" 
-                   class="<?php echo $current_tab === 'profile' ? 'bg-blue-600 text-white' : 'text-gray-600 hover:text-gray-900 hover:bg-gray-100'; ?> px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center">
-                    <i class="fas fa-user-cog mr-2"></i>Profile
-                </a>
             </nav>
         </div>
 
@@ -283,8 +275,6 @@ function nds_staff_portal_tab_url($tab)
                 include plugin_dir_path(__FILE__) . '../includes/partials/staff-dashboard-enrollment.php';
             } elseif ($current_tab === 'structure') {
                 include plugin_dir_path(__FILE__) . '../includes/partials/staff-dashboard-structure.php';
-            } elseif ($current_tab === 'profile') {
-                include plugin_dir_path(__FILE__) . '../includes/partials/staff-dashboard-profile.php';
             }
             ?>
         </div>
