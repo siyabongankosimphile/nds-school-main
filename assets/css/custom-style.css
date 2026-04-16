@@ -1,0 +1,304 @@
+.sub-menu{
+    background: rgba(0, 0, 0, 0.2) !important;
+}
+.ast-primary-header-bar{
+    background: rgba(0, 0, 0, 0.1) !important;
+}
+.container-new{
+    width: 100%;
+}
+.prog-list{
+  width: 100%;
+  a{
+    padding: 15px 10px;
+    width: 100%;
+	background-color: white;
+	display: block;
+	border-bottom: 1px solid #f2f2f2;
+  }
+  a:hover{
+	background-color: #183030ff;
+	color: #ebd35bff;
+  }
+}
+.split-content{
+	display: flex;
+}
+.sidepic{
+	width: 30%;
+	background-color: #d2d2d2;
+	overflow-y: auto;
+	background: url('http://ndsacademy.co.za/wp-content/uploads/2025/07/Picture-3-1.jpeg');
+	background-position: center center;
+	background-repeat: no-repeat;
+	background-size: cover;
+	min-height: 400px;
+	border-radius: 15px;
+}
+.sidepic-overlay{
+	background: rgba(0, 0, 0, 0.5);
+	height: 100%;
+	border-radius: 15px;
+}
+.programs{
+	width: 70%;
+	padding: 10px 20px;
+}
+
+.sidebar{
+	width: 30%;
+	padding: 10px;
+	background-color: #f2f2f2;
+	overflow-y: auto;
+}
+.content{
+	width: 70%;
+	padding: 10px 20px;
+}
+
+.coursee{
+	background-color: white;
+	padding: 20px;
+	box-shadow: 2px 2px 8px #888;
+	border-radius: 15px;
+	margin-bottom: 20px;
+	width: 100%;
+}
+.cus-btn{
+	padding: 10px 20px;
+	background-color: #ebd35bff;
+	margin: 10px 0;
+	border-radius: 50px;
+}
+.prog-prices{
+    background: #f3f9f5;
+    padding: 10px;
+    a{
+        color: #6aa4ca;
+    }
+}
+
+@media only screen and (max-width: 768px) {
+    .split-content{
+    	display: block;
+    }
+    	.sidepic{
+    	width: 100%;
+    }
+    .programs{
+    	width: 100%;
+    }
+    .sidebar{
+    	width: 100%;
+    }
+    .content{
+    	width: 100%;
+    }
+	
+}
+
+/* -------------------------------------------------------------------------- */
+/* Frontend: Online Application / Registration Form                           */
+/* -------------------------------------------------------------------------- */
+
+#registration-form {
+    max-width: 960px;
+    margin: 40px auto;
+    padding: 32px;
+    background: #ffffff;
+    border-radius: 16px;
+    box-shadow: 0 18px 45px rgba(15, 23, 42, 0.08);
+    border: 1px solid #e5e7eb;
+}
+
+#registration-form h4 {
+    margin: 32px 0 16px;
+    font-size: 1.05rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: #1f2933;
+}
+
+#registration-form h4:first-of-type {
+    margin-top: 0;
+}
+
+.nds-app-section-heading {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    border-radius: 999px;
+    background: linear-gradient(90deg, #f3f4f6, #e5e7eb);
+    border: 1px solid #d1d5db;
+}
+
+.nds-app-section-heading strong {
+    font-weight: 600;
+}
+
+.nds-app-section-heading span {
+    display: inline-block;
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    background: #1f2933;
+    color: #f9fafb;
+    font-size: 0.8rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+#registration-form label {
+    display: block;
+    margin-bottom: 4px;
+    font-size: 0.9rem;
+    font-weight: 500;
+    color: #4b5563;
+}
+
+#registration-form input[type=text],
+#registration-form input[type=date],
+#registration-form input[type=tel],
+#registration-form input[type=email],
+#registration-form select,
+#registration-form textarea {
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #d1d5db;
+    width: 100%;
+    box-sizing: border-box;
+    font-size: 0.95rem;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.15s ease;
+    background-color: #f9fafb;
+}
+
+#registration-form input[type=text]:focus,
+#registration-form input[type=date]:focus,
+#registration-form input[type=tel]:focus,
+#registration-form input[type=email]:focus,
+#registration-form select:focus,
+#registration-form textarea:focus {
+    outline: none;
+    border-color: #2563eb;
+    box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+    background-color: #ffffff;
+}
+
+#registration-form textarea {
+    resize: vertical;
+}
+
+#registration-form input[type=file] {
+    margin-top: 4px;
+    margin-bottom: 12px;
+}
+
+#registration-form .form-control,
+#registration-form .grid > div {
+    margin-bottom: 18px;
+}
+
+#registration-form .nds-app-help {
+    font-size: 0.78rem;
+    color: #6b7280;
+}
+
+#registration-form .nds-app-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px;
+    border-radius: 999px;
+    background: #eff6ff;
+    color: #1d4ed8;
+    font-size: 0.78rem;
+    font-weight: 500;
+}
+
+#registration-form .nds-app-badge svg {
+    width: 14px;
+    height: 14px;
+}
+
+#registration-form .nds-app-success {
+    background: #ecfdf3;
+    border: 1px solid #a7f3d0;
+    color: #065f46;
+    padding: 18px 20px;
+    margin-bottom: 26px;
+    border-radius: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+#registration-form .nds-app-success h3 {
+    margin: 0;
+    font-size: 1.05rem;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+#registration-form .nds-app-success h3 span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 999px;
+    background: #10b981;
+    color: #ecfdf3;
+    font-size: 0.85rem;
+}
+
+#registration-form .nds-app-success p {
+    margin: 0;
+    font-size: 0.9rem;
+}
+
+#registration-form .nds-app-success strong {
+    font-weight: 600;
+}
+
+#registration-form input[type=submit] {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 24px;
+    padding: 12px 26px;
+    background: linear-gradient(135deg, #1f2933, #0f172a);
+    color: #f9fafb;
+    border-radius: 999px;
+    border: none;
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    box-shadow: 0 10px 25px rgba(15, 23, 42, 0.35);
+    transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+}
+
+#registration-form input[type=submit]:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 16px 40px rgba(15, 23, 42, 0.45);
+    background: linear-gradient(135deg, #111827, #020617);
+}
+
+#registration-form input[type=submit]:active {
+    transform: translateY(0);
+    box-shadow: 0 8px 20px rgba(15, 23, 42, 0.35);
+}
+
+@media only screen and (max-width: 768px) {
+    #registration-form {
+        padding: 20px;
+        margin: 24px auto;
+        border-radius: 12px;
+        box-shadow: 0 12px 30px rgba(15, 23, 42, 0.12);
+    }
+}

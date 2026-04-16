@@ -1,0 +1,10 @@
+# Ignore uploaded files but keep folder structure
+Students/*
+!Students/.gitkeep
+Applicants/*
+!Applicants/.gitkeep
+temp-uploads/*
+!temp-uploads/.gitkeep
+
+
+

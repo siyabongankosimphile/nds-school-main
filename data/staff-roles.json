@@ -1,0 +1,12 @@
+{
+    "roles": [
+        "Lecturer",
+        "Admin",
+        "Support",
+        "Program Coordinator",
+        "Head Chef",
+        "Cleaner"
+    ],
+    "updated_at": "2026-01-15 13:52:39",
+    "updated_by": 1
+}

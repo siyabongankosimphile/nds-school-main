@@ -1,0 +1,62 @@
+/* Remove space left by disabled navbar (adjust height based on your navbar) */
+body.student-portal, .nds-calendar-container {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+
+/* Move calendar header to the top */
+.fc-header-toolbar {
+    position: sticky;
+    top: 0;
+    z-index: 1000;
+    background: #fff; /* Ensure visibility over content */
+    border-bottom: 1px solid #ddd;
+}
+
+/* Adjust main content to account for sticky header if needed */
+.fc-view-container {
+    margin-top: 10px; /* Small gap if header is sticky */
+}
+
+/* Styles moved from learner-portal.php */
+html, body {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+}
+body.nds-portal-body {
+    margin: 0;
+    padding: 0;
+}
+
+/* Hide website header/navbar completely on portal */
+body.nds-portal-body header,
+body.nds-portal-body .site-header,
+body.nds-portal-body .main-header,
+body.nds-portal-body nav.site-navigation,
+body.nds-portal-body #site-header,
+body.nds-portal-body #masthead,
+body.nds-portal-body .ast-primary-header-bar,
+body.nds-portal-body .site-navigation,
+body.nds-portal-body #header,
+body.nds-portal-body .header {
+    display: none !important;
+    height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: hidden !important;
+}
+
+/* Remove gap - use margin instead of top */
+.nds-portal-offset {
+    margin-top: 0 !important;
+    padding-top: 0 !important;
+}
+body.admin-bar .nds-portal-offset { 
+    margin-top: 32px !important; 
+}
+@media screen and (max-width: 782px) {
+    body.admin-bar .nds-portal-offset { 
+        margin-top: 46px !important; 
+    }
+}

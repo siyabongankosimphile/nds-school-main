@@ -1,0 +1,326 @@
+/* NDS Hero Carousel – fresh styles */
+/* Define primary color variable */
+:root {
+  --primarycolor: #ebd35b;
+  --secondarycolor: #fff;
+}
+
+
+.nds-hero-carousel {
+  position: relative;
+  width: 100%;
+  height: var(--carousel-height, 600px);
+  overflow: hidden;
+}
+.nds-hero-carousel .swiper,
+.nds-hero-carousel .swiper-wrapper,
+.nds-hero-carousel .swiper-slide {
+  height: 100%;
+}
+
+/* Slide layout */
+.nds-hero-carousel .swiper-slide {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+.nds-slide-content {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+}
+.nds-slide-image {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+.nds-slide-image img {
+  width: 100%;
+  height: 100%;
+  /* Ensure theme defaults like img{height:auto} don't win */
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  object-fit: cover !important;
+  -o-object-fit: cover !important;
+  object-position: center;
+  -o-object-position: center;
+  /* Ensures image always covers the container, even if aspect ratio differs */
+}
+
+/* Ken Burns subtle zoom on the active slide image */
+.nds-hero-carousel .swiper-slide .nds-slide-image img {
+  transform: scale(1);
+  transition: transform var(--hero-zoom-duration, 10s) ease-out;
+}
+.nds-hero-carousel .swiper-slide-active .nds-slide-image img {
+  transform: scale(1.08);
+}
+
+/* Soften Swiper fade transitions */
+.nds-hero-carousel .swiper-fade .swiper-slide {
+  transition-timing-function: cubic-bezier(.22,1,.36,1) !important; /* ease-out-esque */
+}
+
+/* Ultimate fallback: force any image in the hero to cover */
+.nds-hero-carousel img {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover !important;
+  display: block;
+}
+.nds-slide-overlay {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(0deg, rgba(0, 0, 0, 0.55) 0%, rgba(0, 0, 0, 0.35) 40%, rgba(0, 0, 0, 0.25) 100%);
+  z-index: 2;
+}
+
+/* Text block */
+.nds-slide-text {
+  position: relative;
+  z-index: 3;
+  width: 100%;
+  max-width: 1200px;
+  padding: 2rem;
+  color: #fff;
+}
+.nds-slide-text-inner {
+  max-width: 800px;
+  margin-left: 0;
+  margin-right: auto;
+  text-align: left;
+}
+.align-center .nds-slide-text-inner {
+  margin: 0 auto;
+  text-align: center;
+}
+.align-right .nds-slide-text-inner {
+  margin-left: auto;
+  margin-right: 0;
+  text-align: right;
+}
+
+.nds-kicker {
+  font-size: 0.875rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  opacity: 0.95;
+  margin-bottom: 0.25rem;
+}
+
+/* Title, subtitle, description font sizes as per instructions */
+.nds-slide-title {
+  font-size: 32px; /* #px as requested */
+  line-height: 1.1;
+  font-weight: 800;
+  margin: 0.25rem 0 1rem 0;
+  color: var(--primarycolor)!important;
+}
+.nds-slide-subtitle {
+  font-size: 64px; /* double nds-slide-title */
+  line-height: 1.15;
+  font-weight: 700;
+  color: var(--secondarycolor)!important;
+  margin-bottom: 1rem;
+  
+}
+.nds-slide-description {
+  font-size: 14px; /* smallest, allows more words */
+  line-height: 1.7;
+  color: #dfe3ea;
+  margin-bottom: 1.5rem;
+}
+
+/* Increase specificity and add !important to prevent theme overrides */
+.nds-hero-carousel .nds-slide-title {
+  font-size: 32px !important;
+  line-height: 1.1 !important;
+  font-weight: 800 !important;
+}
+.nds-hero-carousel .nds-slide-subtitle {
+  font-size: 64px !important;
+  line-height: 1.15 !important;
+  font-weight: 700 !important;
+}
+.nds-hero-carousel .nds-slide-description {
+  font-size: 14px !important;
+  line-height: 1.7 !important;
+}
+
+/* CTAs */
+.nds-cta-group {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.nds-slide-button {
+  display: inline-block;
+  padding: 0.9rem 1.6rem;
+  border-radius: 9999px;
+  background: var(--primarycolor);
+  border: 2px solid var(--primarycolor);
+  color: #111827;
+  text-decoration: none !important;
+  font-weight: 700;
+  transition:
+    transform 0.2s ease,
+    box-shadow 0.2s ease,
+    background-color 0.2s ease;
+  box-shadow: 0 8px 28px rgba(250, 204, 21, 0.35);
+}
+.nds-slide-button:hover,
+.nds-slide-button:focus {
+  background: #f59e0b;
+  border-color: #f59e0b;
+  transform: translateY(-1px);
+  color: #111827;
+  text-decoration: none !important;
+}
+.nds-slide-link {
+  display: inline-block;
+  padding: 0.9rem 1.4rem;
+  border-radius: 9999px;
+  border: 2px solid #fff;
+  color: var(--secondarycolor)!important;
+  text-decoration: none;
+  font-weight: 600;
+}
+.nds-slide-link:hover,
+.nds-slide-link:focus {
+  background: rgba(255, 255, 255, 0.12);
+  text-decoration: none;
+}
+
+/* Stagger animation for text */
+.nds-stagger {
+  opacity: 0;
+  transform: translateY(14px) scale(.98);
+  filter: blur(3px);
+  transition: opacity .6s cubic-bezier(.22,1,.36,1), transform .6s cubic-bezier(.22,1,.36,1), filter .6s cubic-bezier(.22,1,.36,1);
+  will-change: opacity, transform, filter;
+}
+.nds-stagger.is-in {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+  filter: blur(0);
+}
+
+/* Nav & dots */
+.nds-hero-carousel .swiper-button-next,
+.nds-hero-carousel .swiper-button-prev {
+  color: #fff;
+  background: rgba(0, 0, 0, 0.35);
+  width: 48px;
+  height: 48px;
+  border-radius: 999px;
+  backdrop-filter: blur(6px);
+  transition:
+    background 0.2s ease,
+    transform 0.2s ease;
+}
+.nds-hero-carousel .swiper-button-next:hover,
+.nds-hero-carousel .swiper-button-prev:hover {
+  background: rgba(0, 0, 0, 0.5);
+  transform: scale(1.05);
+}
+.nds-hero-carousel .swiper-button-next:after,
+.nds-hero-carousel .swiper-button-prev:after {
+  font-size: 18px;
+  font-weight: 700;
+}
+.nds-hero-carousel .swiper-pagination {
+  bottom: 16px;
+}
+.nds-hero-carousel .swiper-pagination-bullet {
+  width: 10px;
+  height: 10px;
+  background: rgba(255, 255, 255, 0.6);
+  opacity: 1;
+  margin: 0 6px;
+  transition:
+    transform 0.2s ease,
+    background 0.2s ease;
+}
+.nds-hero-carousel .swiper-pagination-bullet-active {
+  background: #fff;
+  transform: scale(1.15);
+}
+
+/* Neutralize aggressive theme link styles within the hero */
+.nds-hero-carousel .nds-cta-group a.nds-slide-button,
+.nds-hero-carousel .nds-cta-group a.nds-slide-button:hover,
+.nds-hero-carousel .nds-cta-group a.nds-slide-button:focus {
+  text-decoration: none !important;
+  color: #111827 !important;
+}
+.nds-hero-carousel .nds-cta-group a.nds-slide-link,
+.nds-hero-carousel .nds-cta-group a.nds-slide-link:hover,
+.nds-hero-carousel .nds-cta-group a.nds-slide-link:focus {
+  text-decoration: none !important;
+  color: var(--secondarycolor) !important;
+}
+
+/* Support older Swiper markup that used .swiper-container */
+.nds-hero-carousel .swiper-container {
+  height: 100%;
+}
+
+/* Responsive */
+@media (max-width: 1024px) {
+  .nds-slide-title { font-size: 24px; }
+  .nds-hero-carousel .nds-slide-title { font-size: 24px !important; }
+  .nds-slide-subtitle { font-size: 48px; }
+  .nds-hero-carousel .nds-slide-subtitle { font-size: 48px !important; }
+}
+@media (max-width: 768px) {
+  .nds-hero-carousel {
+    height: var(--carousel-height, 420px);
+  }
+  .nds-slide-text {
+    padding: 1.25rem;
+  }
+  .nds-slide-title { font-size: 18px; }
+  .nds-hero-carousel .nds-slide-title { font-size: 18px !important; }
+  .nds-slide-subtitle { font-size: 36px; }
+  .nds-hero-carousel .nds-slide-subtitle { font-size: 36px !important; }
+  .nds-slide-description { font-size: 12px; }
+  .nds-hero-carousel .nds-slide-description { font-size: 12px !important; }
+}
+@media (max-width: 480px) {
+  .nds-hero-carousel {
+    height: var(--carousel-height, 360px);
+  }
+  .nds-slide-title { font-size: 14px; }
+  .nds-hero-carousel .nds-slide-title { font-size: 14px !important; }
+  .nds-slide-subtitle { font-size: 28px; }
+  .nds-hero-carousel .nds-slide-subtitle { font-size: 28px !important; }
+}
+
+/* Accessibility helpers */
+.nds-hero-carousel:focus-within .swiper-button-next,
+.nds-hero-carousel:focus-within .swiper-button-prev {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nds-stagger {
+    transition: none !important;
+    transform: none !important;
+    opacity: 1 !important;
+  }
+  .nds-slide-button {
+    transition: none;
+  }
+  .nds-hero-carousel .swiper-button-next,
+  .nds-hero-carousel .swiper-button-prev {
+    transition: none;
+  }
+}

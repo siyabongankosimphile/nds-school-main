@@ -1,0 +1,441 @@
+/**
+ * NDS Hero Carousel Admin Styles
+ * Admin interface styling for carousel management
+ */
+
+/* Main Admin Container */
+.nds-carousel-preview {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.nds-carousel-preview h2 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+.nds-preview-container {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    overflow: hidden;
+    background: #f9f9f9;
+}
+
+/* Statistics Boxes */
+.nds-carousel-stats {
+    display: flex;
+    gap: 20px;
+    margin: 20px 0;
+    flex-wrap: wrap;
+}
+
+.nds-stat-box {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 20px;
+    text-align: center;
+    min-width: 120px;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.nds-stat-box h3 {
+    font-size: 2rem;
+    margin: 0 0 5px 0;
+    color: #0073aa;
+    font-weight: 600;
+}
+
+.nds-stat-box p {
+    margin: 0;
+    color: #666;
+    font-size: 14px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Carousel Table */
+.nds-carousel-table {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    margin: 20px 0;
+    overflow: hidden;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+/* Custom grid header/body replacing WP list-table */
+.nds-slides-header,
+.nds-slide-row {
+    display: grid;
+    grid-template-columns: 40px 90px 1fr 1fr 100px 120px 160px;
+    gap: 8px;
+    align-items: center;
+}
+
+.nds-slides-header {
+    padding: 10px 12px;
+    background: #f1f1f1;
+    border-bottom: 1px solid #e2e8f0;
+    font-weight: 600;
+}
+
+.nds-slides-body { max-height: 520px; overflow: auto; }
+.nds-slide-row { padding: 10px 12px; border-bottom: 1px solid #eef2f7; }
+.nds-slide-row:hover { background: #f9fafb; }
+.nds-cell.nds-actions .button { margin-right: 6px; }
+.nds-cell.nds-cb { display: flex; justify-content: center; }
+.nds-cell.nds-order input.small-text { width: 70px; }
+.nds-empty-row { padding: 16px; text-align: center; color: #666; }
+
+/* Disable WP's sticky header inside this component so it doesn't overlap */
+.nds-carousel-table .wp-list-table thead,
+.nds-carousel-table .wp-list-table thead th,
+.nds-carousel-table .wp-list-table thead td {
+    position: static !important;
+    top: auto !important;
+    z-index: auto !important;
+    display: table-header-group !important;
+    box-shadow: none !important;
+}
+
+/* extra specificity to beat core sticky header selectors */
+.wrap .nds-carousel-table .wp-list-table thead,
+.wrap .nds-carousel-table .wp-list-table thead th {
+    position: static !important;
+    top: auto !important;
+    display: table-header-group !important;
+}
+
+.nds-carousel-table .wp-list-table .is-sticky { background: inherit; }
+
+.nds-carousel-table .wp-list-table th {
+    background: #f1f1f1;
+    font-weight: 600;
+    color: #23282d;
+}
+
+.nds-carousel-table .wp-list-table td {
+    vertical-align: middle;
+}
+
+/* Image Column */
+.column-image {
+    width: 80px;
+}
+
+.column-image img {
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.nds-no-image {
+    width: 60px;
+    height: 40px;
+    background: #f0f0f0;
+    border: 1px dashed #ccc;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 10px;
+    color: #999;
+    text-align: center;
+}
+
+/* Order Column */
+.column-order input {
+    width: 60px;
+    text-align: center;
+}
+
+/* Status Toggle */
+.nds-toggle {
+    position: relative;
+    display: inline-block;
+    width: 50px;
+    height: 24px;
+}
+
+.nds-toggle input {
+    opacity: 0;
+    width: 0;
+    height: 0;
+}
+
+.nds-toggle-slider {
+    position: absolute;
+    cursor: pointer;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background-color: #ccc;
+    transition: 0.3s;
+    border-radius: 24px;
+}
+
+.nds-toggle-slider:before {
+    position: absolute;
+    content: "";
+    height: 18px;
+    width: 18px;
+    left: 3px;
+    bottom: 3px;
+    background-color: white;
+    transition: 0.3s;
+    border-radius: 50%;
+}
+
+.nds-toggle input:checked + .nds-toggle-slider {
+    background-color: #0073aa;
+}
+
+.nds-toggle input:checked + .nds-toggle-slider:before {
+    transform: translateX(26px);
+}
+
+.nds-toggle:hover .nds-toggle-slider {
+    box-shadow: 0 0 5px rgba(0, 115, 170, 0.3);
+}
+
+/* Actions Column */
+.column-actions {
+    white-space: nowrap;
+}
+
+.column-actions .button {
+    margin-right: 5px;
+}
+
+.column-actions .button-link-delete {
+    color: #a00;
+}
+
+.column-actions .button-link-delete:hover {
+    color: #dc3232;
+}
+
+/* Bulk Actions */
+.nds-bulk-actions {
+    background: #f9f9f9;
+    border: 1px solid #ccd0d4;
+    border-top: none;
+    padding: 15px 20px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.nds-bulk-actions select {
+    min-width: 150px;
+}
+
+/* Shortcode Usage */
+.nds-shortcode-usage {
+    background: #fff;
+    border: 1px solid #ccd0d4;
+    border-radius: 4px;
+    padding: 20px;
+    margin: 20px 0;
+    box-shadow: 0 1px 1px rgba(0, 0, 0, 0.04);
+}
+
+.nds-shortcode-usage h3 {
+    margin-top: 0;
+    color: #23282d;
+}
+
+.nds-shortcode-usage code {
+    background: #f1f1f1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    font-family: Consolas, Monaco, monospace;
+    font-size: 13px;
+}
+
+.nds-shortcode-usage ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.nds-shortcode-usage li {
+    margin: 5px 0;
+}
+
+/* Image Upload */
+.nds-image-upload {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.nds-image-preview {
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    padding: 10px;
+    background: #f9f9f9;
+    text-align: center;
+    min-height: 50px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.nds-image-preview img {
+    border-radius: 4px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+/* Form Styling */
+.form-table th {
+    width: 200px;
+    padding: 20px 10px 20px 0;
+    vertical-align: top;
+}
+
+.form-table td {
+    padding: 15px 10px;
+}
+
+.form-table .description {
+    font-style: italic;
+    color: #666;
+    margin-top: 5px;
+}
+
+/* Button Styling */
+.button-primary {
+    background: #0073aa;
+    border-color: #0073aa;
+    color: #fff;
+    text-decoration: none;
+    text-shadow: none;
+    box-shadow: 0 1px 0 #006799;
+}
+
+.button-primary:hover {
+    background: #005a87;
+    border-color: #005a87;
+    color: #fff;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .nds-carousel-stats {
+        flex-direction: column;
+    }
+    
+    .nds-stat-box {
+        min-width: auto;
+    }
+    
+    .nds-bulk-actions {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .nds-bulk-actions select,
+    .nds-bulk-actions button {
+        width: 100%;
+        margin-bottom: 10px;
+    }
+    
+    .nds-carousel-table {
+        overflow-x: auto;
+    }
+    
+    .wp-list-table {
+        min-width: 600px;
+    }
+}
+
+/* Loading States */
+.nds-loading {
+    opacity: 0.6;
+    pointer-events: none;
+}
+
+.nds-loading::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid #f3f3f3;
+    border-top: 2px solid #0073aa;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Success/Error Messages */
+.notice {
+    margin: 5px 0 15px;
+    padding: 1px 12px;
+    border-left: 4px solid #00a0d2;
+    background: #fff;
+    box-shadow: 0 1px 1px 0 rgba(0, 0, 0, 0.1);
+}
+
+.notice.notice-success {
+    border-left-color: #46b450;
+}
+
+.notice.notice-error {
+    border-left-color: #dc3232;
+}
+
+/* Accessibility Improvements */
+.nds-toggle:focus-within .nds-toggle-slider {
+    outline: 2px solid #0073aa;
+    outline-offset: 2px;
+}
+
+.button:focus {
+    outline: 2px solid #0073aa;
+    outline-offset: 2px;
+}
+
+/* High Contrast Mode */
+@media (prefers-contrast: high) {
+    .nds-toggle-slider {
+        border: 2px solid #000;
+    }
+    
+    .nds-toggle input:checked + .nds-toggle-slider {
+        background-color: #000;
+    }
+    
+    .nds-stat-box {
+        border: 2px solid #000;
+    }
+}
+
+/* Print Styles */
+@media print {
+    .nds-bulk-actions,
+    .nds-shortcode-usage {
+        display: none;
+    }
+    
+    .nds-carousel-table {
+        border: 1px solid #000;
+    }
+    
+    .nds-carousel-table th,
+    .nds-carousel-table td {
+        border: 1px solid #000;
+        padding: 5px;
+    }
+}

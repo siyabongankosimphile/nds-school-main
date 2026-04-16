@@ -1,0 +1,71 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Build outputs (if not needed in production)
+dist/
+*.map
+
+# Backups
+backups/
+.backups/
+*.sql
+*.backup
+
+# Development files
+.DS_Store
+.cursor/
+*.log
+debug*.php
+test*.php
+test*.html
+*.md
+!README.txt
+
+# Temporary files
+*.tmp
+*.temp
+
+# User-generated content (already handled in public/.gitignore)
+# But ensure these are excluded from plugin distribution
+public/temp-uploads/*
+public/Students/*
+public/Applicants/*
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# Migration/seed files (development only)
+seed-*.php
+migrate-*.php
+run-*.php
+fix-*.php
+empty-*.php
+truncate-*.php
+cleanup-*.sql
+diagnostic-*.sql
+university-schema.sql
+
+# Documentation (keep only README.txt for WordPress)
+*.md
+!README.txt
+
+# Previous timetables
+timetables_previous/
+
+# Local Copilot and agent state
+.continue/
+
+# Local database/export artifacts
+database-export-*/
+
+# Local working copy created during migrations/refactors
+nds-school-nds-school-changes/
