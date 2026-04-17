@@ -7,6 +7,24 @@ global $wpdb;
 
 $course_ids = isset($course_ids) && is_array($course_ids) ? array_values(array_map('intval', $course_ids)) : array();
 $selected_assessment_id = isset($_GET['assessment_id']) ? (int) $_GET['assessment_id'] : 0;
+$selected_content_course_filter = isset($_GET['content_course_id']) ? (int) $_GET['content_course_id'] : 0;
+$selected_content_module_filter = isset($_GET['content_module_id']) ? (int) $_GET['content_module_id'] : 0;
+$selected_content_status_filter = isset($_GET['content_submission_status']) ? sanitize_key((string) wp_unslash($_GET['content_submission_status'])) : '';
+
+$assessments_tab_url = nds_staff_portal_tab_url('assessments');
+$content_filter_query = array();
+if ($selected_content_course_filter > 0) {
+    $content_filter_query['content_course_id'] = $selected_content_course_filter;
+}
+if ($selected_content_module_filter > 0) {
+    $content_filter_query['content_module_id'] = $selected_content_module_filter;
+}
+if ($selected_content_status_filter !== '') {
+    $content_filter_query['content_submission_status'] = $selected_content_status_filter;
+}
+$assessments_tab_filtered_url = !empty($content_filter_query)
+    ? add_query_arg($content_filter_query, $assessments_tab_url)
+    : $assessments_tab_url;
 
 $modules_for_form = array();
 if (!empty($course_ids)) {
@@ -62,6 +80,79 @@ if ($selected_assessment_id > 0) {
              WHERE ssub.assessment_id = %d
              ORDER BY ssub.submitted_at DESC",
             $selected_assessment_id
+        ), ARRAY_A);
+    }
+}
+
+$quiz_attempt_rows = array();
+if (!empty($course_ids) && function_exists('nds_portal_ensure_quiz_attempts_table')) {
+    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+    $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
+
+    $quiz_attempt_rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT qa.id, qa.attempt_no, qa.total_questions, qa.graded_questions, qa.correct_answers,
+                qa.score_percent, qa.submitted_at,
+                st.student_number, st.first_name, st.last_name,
+                lc.id AS content_id, lc.title AS quiz_title, lc.min_grade_required,
+                c.name AS course_name,
+                m.name AS module_name
+         FROM {$quiz_attempts_table} qa
+         INNER JOIN {$wpdb->prefix}nds_lecturer_content lc ON lc.id = qa.content_id
+         INNER JOIN {$wpdb->prefix}nds_students st ON st.id = qa.student_id
+         LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = qa.course_id
+         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = qa.module_id
+         WHERE lc.staff_id = %d
+           AND qa.course_id IN ({$placeholders})
+         ORDER BY qa.submitted_at DESC
+         LIMIT 100",
+        array_merge(array((int) $staff_id), $course_ids)
+    ), ARRAY_A);
+}
+
+$content_assignment_submission_rows = array();
+if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submissions_table')) {
+    $assignment_submissions_table = nds_portal_ensure_assignment_submissions_table();
+    $filtered_course_ids = $course_ids;
+    if ($selected_content_course_filter > 0 && in_array($selected_content_course_filter, $course_ids, true)) {
+        $filtered_course_ids = array($selected_content_course_filter);
+    }
+
+    if (!empty($filtered_course_ids)) {
+        $where_clauses = array('lc.staff_id = %d');
+        $query_params = array((int) $staff_id);
+
+        $course_placeholders = implode(',', array_fill(0, count($filtered_course_ids), '%d'));
+        $where_clauses[] = "cs.course_id IN ({$course_placeholders})";
+        $query_params = array_merge($query_params, $filtered_course_ids);
+
+        if ($selected_content_module_filter > 0) {
+            $where_clauses[] = 'cs.module_id = %d';
+            $query_params[] = $selected_content_module_filter;
+        }
+
+        if ($selected_content_status_filter !== '' && in_array($selected_content_status_filter, array('submitted', 'late', 'graded'), true)) {
+            $where_clauses[] = 'cs.status = %s';
+            $query_params[] = $selected_content_status_filter;
+        }
+
+        $where_sql = implode(' AND ', $where_clauses);
+
+        $content_assignment_submission_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT cs.id, cs.content_id, cs.attempt_no, cs.submitted_text, cs.submission_link, cs.file_url,
+                    cs.file_name, cs.file_size, cs.score, cs.feedback, cs.status, cs.submitted_at, cs.graded_at,
+                    st.student_number, st.first_name, st.last_name,
+                    lc.title AS assignment_title,
+                    c.name AS course_name,
+                    m.name AS module_name
+             FROM {$assignment_submissions_table} cs
+             INNER JOIN {$wpdb->prefix}nds_lecturer_content lc ON lc.id = cs.content_id
+             INNER JOIN {$wpdb->prefix}nds_students st ON st.id = cs.student_id
+             LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = cs.course_id
+             LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = cs.module_id
+             WHERE {$where_sql}
+             ORDER BY cs.submitted_at DESC
+             LIMIT 100",
+            $query_params
         ), ARRAY_A);
     }
 }
@@ -285,6 +376,186 @@ if ($selected_assessment_id > 0) {
                     <?php endforeach; ?>
                 </div>
             <?php endif; ?>
+        <?php endif; ?>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5">
+        <h3 class="text-lg font-semibold text-gray-900 mb-3">Learner Quiz Attempts (Content Quizzes)</h3>
+
+        <?php if (empty($quiz_attempt_rows)) : ?>
+            <p class="text-sm text-gray-600">No learner quiz attempts yet.</p>
+        <?php else : ?>
+            <div class="overflow-x-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-3 py-2 text-left">Student</th>
+                            <th class="px-3 py-2 text-left">Quiz</th>
+                            <th class="px-3 py-2 text-left">Course / Module</th>
+                            <th class="px-3 py-2 text-left">Attempt</th>
+                            <th class="px-3 py-2 text-left">Score</th>
+                            <th class="px-3 py-2 text-left">Status</th>
+                            <th class="px-3 py-2 text-left">Submitted</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white">
+                        <?php foreach ($quiz_attempt_rows as $qa_row) : ?>
+                            <?php
+                            $score = isset($qa_row['score_percent']) ? (float) $qa_row['score_percent'] : null;
+                            $graded_questions = (int) ($qa_row['graded_questions'] ?? 0);
+                            $threshold = isset($qa_row['min_grade_required']) && $qa_row['min_grade_required'] !== null
+                                ? max(0.0, min(100.0, (float) $qa_row['min_grade_required']))
+                                : 50.0;
+                            $has_auto_score = $score !== null && $graded_questions > 0;
+                            $is_pass = $has_auto_score && $score >= $threshold;
+                            ?>
+                            <tr>
+                                <td class="px-3 py-2">
+                                    <div class="font-medium text-gray-800"><?php echo esc_html(trim(($qa_row['first_name'] ?? '') . ' ' . ($qa_row['last_name'] ?? ''))); ?></div>
+                                    <div class="text-xs text-gray-500"><?php echo esc_html($qa_row['student_number'] ?? ''); ?></div>
+                                </td>
+                                <td class="px-3 py-2"><?php echo esc_html($qa_row['quiz_title'] ?? 'Quiz'); ?></td>
+                                <td class="px-3 py-2">
+                                    <div><?php echo esc_html($qa_row['course_name'] ?? '-'); ?></div>
+                                    <div class="text-xs text-gray-500"><?php echo esc_html($qa_row['module_name'] ?? '-'); ?></div>
+                                </td>
+                                <td class="px-3 py-2">#<?php echo (int) ($qa_row['attempt_no'] ?? 0); ?></td>
+                                <td class="px-3 py-2">
+                                    <?php if ($has_auto_score) : ?>
+                                        <?php echo esc_html(number_format($score, 2)); ?>%
+                                        <span class="text-xs text-gray-500">(<?php echo (int) ($qa_row['correct_answers'] ?? 0); ?>/<?php echo (int) ($qa_row['graded_questions'] ?? 0); ?>)</span>
+                                    <?php else : ?>
+                                        <span class="text-xs text-amber-700">Pending review</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <?php if ($has_auto_score) : ?>
+                                        <span class="text-[11px] font-semibold px-2 py-1 rounded <?php echo $is_pass ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'; ?>">
+                                            <?php echo $is_pass ? 'Pass' : 'Fail'; ?>
+                                        </span>
+                                    <?php else : ?>
+                                        <span class="text-[11px] font-semibold px-2 py-1 rounded bg-amber-100 text-amber-700">Pending</span>
+                                    <?php endif; ?>
+                                </td>
+                                <td class="px-3 py-2"><?php echo esc_html(date_i18n('Y-m-d H:i', strtotime((string) ($qa_row['submitted_at'] ?? 'now')))); ?></td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+        <?php endif; ?>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5">
+        <h3 class="text-lg font-semibold text-gray-900 mb-3">Learner Assignment Submissions (Content Assignments)</h3>
+
+        <form method="get" action="<?php echo esc_url(home_url('/staff-portal/')); ?>" class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4">
+            <input type="hidden" name="tab" value="assessments">
+
+            <div>
+                <label class="block text-xs font-medium text-gray-700 mb-1">Course</label>
+                <select name="content_course_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                    <option value="">All courses</option>
+                    <?php foreach ($courses_taught as $course) : ?>
+                        <option value="<?php echo (int) $course['id']; ?>" <?php selected($selected_content_course_filter, (int) $course['id']); ?>>
+                            <?php echo esc_html($course['name']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs font-medium text-gray-700 mb-1">Module</label>
+                <select name="content_module_id" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                    <option value="">All modules</option>
+                    <?php foreach ($modules_for_form as $module) : ?>
+                        <?php
+                        if ($selected_content_course_filter > 0 && (int) $module['course_id'] !== $selected_content_course_filter) {
+                            continue;
+                        }
+                        ?>
+                        <option value="<?php echo (int) $module['id']; ?>" <?php selected($selected_content_module_filter, (int) $module['id']); ?>>
+                            <?php echo esc_html($module['course_name'] . ' - ' . $module['name']); ?>
+                        </option>
+                    <?php endforeach; ?>
+                </select>
+            </div>
+
+            <div>
+                <label class="block text-xs font-medium text-gray-700 mb-1">Status</label>
+                <select name="content_submission_status" class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                    <option value="">All statuses</option>
+                    <option value="submitted" <?php selected($selected_content_status_filter, 'submitted'); ?>>Submitted</option>
+                    <option value="late" <?php selected($selected_content_status_filter, 'late'); ?>>Late</option>
+                    <option value="graded" <?php selected($selected_content_status_filter, 'graded'); ?>>Graded</option>
+                </select>
+            </div>
+
+            <div class="flex items-end gap-2">
+                <button type="submit" class="px-4 py-2 bg-slate-800 text-white rounded-lg hover:bg-slate-900 text-sm">Filter</button>
+                <a href="<?php echo esc_url($assessments_tab_url); ?>" class="px-4 py-2 border border-gray-300 rounded-lg text-sm text-gray-700 hover:bg-gray-50">Reset</a>
+            </div>
+        </form>
+
+        <?php if (empty($content_assignment_submission_rows)) : ?>
+            <p class="text-sm text-gray-600">No learner assignment submissions yet.</p>
+        <?php else : ?>
+            <div class="space-y-3">
+                <?php foreach ($content_assignment_submission_rows as $submission_row) : ?>
+                    <?php
+                    $submission_status = sanitize_key((string) ($submission_row['status'] ?? 'submitted'));
+                    $status_class = $submission_status === 'graded'
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : ($submission_status === 'late' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700');
+                    ?>
+                    <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="border border-gray-200 rounded-lg p-4 grid grid-cols-1 lg:grid-cols-8 gap-3">
+                        <?php wp_nonce_field('nds_staff_grade_content_assignment_submission', 'nds_staff_grade_content_assignment_submission_nonce'); ?>
+                        <input type="hidden" name="action" value="nds_staff_grade_content_assignment_submission">
+                        <input type="hidden" name="content_submission_id" value="<?php echo esc_attr($submission_row['id']); ?>">
+                        <input type="hidden" name="redirect_url" value="<?php echo esc_url($assessments_tab_filtered_url); ?>">
+
+                        <div class="lg:col-span-2 text-sm text-gray-700">
+                            <div class="font-semibold text-gray-900"><?php echo esc_html(trim((string) ($submission_row['first_name'] ?? '') . ' ' . (string) ($submission_row['last_name'] ?? ''))); ?></div>
+                            <div class="text-xs text-gray-500"><?php echo esc_html($submission_row['student_number'] ?? ''); ?></div>
+                            <div class="mt-2 text-xs text-gray-600"><?php echo esc_html($submission_row['assignment_title'] ?? 'Assignment'); ?></div>
+                            <div class="text-[11px] text-gray-500"><?php echo esc_html($submission_row['course_name'] ?? '-'); ?><?php if (!empty($submission_row['module_name'])) : ?> · <?php echo esc_html($submission_row['module_name']); ?><?php endif; ?></div>
+                            <div class="mt-2 text-[11px] text-gray-500">Attempt #<?php echo (int) ($submission_row['attempt_no'] ?? 0); ?> · <?php echo esc_html(date_i18n('Y-m-d H:i', strtotime((string) ($submission_row['submitted_at'] ?? 'now')))); ?></div>
+                            <div class="mt-1"><span class="text-[11px] font-semibold px-2 py-1 rounded <?php echo esc_attr($status_class); ?>"><?php echo esc_html(ucfirst(str_replace('_', ' ', $submission_status))); ?></span></div>
+                        </div>
+
+                        <div class="lg:col-span-3 text-sm text-gray-700 space-y-2">
+                            <?php if (!empty($submission_row['submitted_text'])) : ?>
+                                <div class="rounded border border-gray-200 bg-gray-50 p-2 whitespace-pre-wrap"><?php echo esc_html((string) $submission_row['submitted_text']); ?></div>
+                            <?php else : ?>
+                                <div class="text-xs text-gray-500">No submission note.</div>
+                            <?php endif; ?>
+
+                            <div class="flex flex-wrap items-center gap-3 text-xs">
+                                <?php if (!empty($submission_row['submission_link'])) : ?>
+                                    <a href="<?php echo esc_url($submission_row['submission_link']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Open submitted link</a>
+                                <?php endif; ?>
+                                <?php if (!empty($submission_row['file_url'])) : ?>
+                                    <a href="<?php echo esc_url($submission_row['file_url']); ?>" target="_blank" rel="noopener" class="text-orange-600 hover:underline font-medium">Open uploaded file<?php echo !empty($submission_row['file_name']) ? ': ' . esc_html((string) $submission_row['file_name']) : ''; ?></a>
+                                <?php endif; ?>
+                            </div>
+                        </div>
+
+                        <div class="lg:col-span-2 space-y-2">
+                            <div>
+                                <label class="text-xs text-gray-600">Feedback</label>
+                                <textarea name="feedback" rows="3" class="w-full border border-gray-300 rounded px-2 py-1 text-sm"><?php echo esc_textarea((string) ($submission_row['feedback'] ?? '')); ?></textarea>
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-600">Score</label>
+                                <input type="number" step="0.01" name="score" value="<?php echo esc_attr($submission_row['score']); ?>" class="w-full border border-gray-300 rounded px-2 py-1 text-sm" placeholder="e.g. 85">
+                            </div>
+                            <div class="flex items-end justify-end pt-1">
+                                <button type="submit" class="px-3 py-2 bg-green-600 text-white rounded hover:bg-green-700 text-sm">Save Review</button>
+                            </div>
+                        </div>
+                    </form>
+                <?php endforeach; ?>
+            </div>
         <?php endif; ?>
     </div>
 </div>

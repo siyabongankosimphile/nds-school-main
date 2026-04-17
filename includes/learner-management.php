@@ -161,7 +161,7 @@ function nds_learner_management_page() {
 
         <!-- Success/Error Messages -->
         <?php if ($message): ?>
-            <div id="messageAlert" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6 p-4 rounded-lg shadow-md <?php echo $message_type === 'success' ? 'bg-green-100 border border-green-400 text-green-700' : 'bg-red-100 border border-red-400 text-red-700'; ?> flex justify-between items-center">
+            <div id="messageAlert" style="border-width:1px; border-color:<?php echo $message_type === 'success' ? '#4ade80' : '#f87171'; ?>" class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6 p-4 rounded-lg shadow-md <?php echo $message_type === 'success' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'; ?> flex justify-between items-center">
                 <div class="flex items-center">
                     <i class="fas fa-<?php echo $message_type === 'success' ? 'check-circle' : 'exclamation-circle'; ?> mr-3 text-xl"></i>
                     <span class="font-medium"><?php echo esc_html($message); ?></span>

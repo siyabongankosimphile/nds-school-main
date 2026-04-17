@@ -203,7 +203,7 @@ function nds_learner_dashboard_page() {
                             'overview' => ['icon' => 'fa-home', 'label' => 'Overview'],
                             'courses' => ['icon' => 'fa-book', 'label' => 'Courses'],
                             'timetable' => ['icon' => 'fa-calendar-alt', 'label' => 'Timetable'],
-                            'finances' => ['icon' => 'fa-dollar-sign', 'label' => 'Finances'],
+                            'finances' => ['icon' => 'fa-money-bill-wave', 'label' => 'R Finances'],
                             'results' => ['icon' => 'fa-chart-bar', 'label' => 'Results'],
                             'graduation' => ['icon' => 'fa-graduation-cap', 'label' => 'Graduation'],
                             'certificates' => ['icon' => 'fa-certificate', 'label' => 'Certificates'],

@@ -359,7 +359,7 @@ function nds_staff_dashboard_improved() {
     </div>
 
     <!-- Add Staff Modal -->
-    <div id="addStaffModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 hidden">
+    <div id="addStaffModal" class="fixed inset-0 bg-black bg-opacity-50 items-center justify-center z-50 hidden">
         <div class="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
             <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
                 <h3 class="text-xl font-semibold text-gray-900">
@@ -429,7 +429,7 @@ function nds_staff_dashboard_improved() {
                             <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Faculty *</label>
-                                    <select name="faculty_id" id="lecturerFaculty" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                    <select id="lecturerFaculty" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
                                         <option value="">Select faculty...</option>
                                         <?php foreach ($faculties as $faculty): ?>
                                             <option value="<?php echo intval($faculty['id']); ?>"><?php echo esc_html($faculty['name']); ?></option>
@@ -439,18 +439,26 @@ function nds_staff_dashboard_improved() {
 
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Program *</label>
-                                    <select name="program_id" id="lecturerProgram" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
+                                    <select id="lecturerProgram" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
                                         <option value="">Select program...</option>
                                     </select>
                                 </div>
 
                                 <div>
                                     <label class="block text-sm font-medium text-gray-700 mb-2">Qualification *</label>
-                                    <select name="course_id" id="lecturerQualification" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
+                                    <select id="lecturerQualification" class="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
                                         <option value="">Select qualification...</option>
                                     </select>
                                 </div>
                             </div>
+
+                            <div class="mt-3">
+                                <button type="button" id="addLecturerAssignmentRow" class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200">
+                                    Add
+                                </button>
+                            </div>
+
+                            <div id="lecturerAssignmentList" class="mt-3 space-y-2"></div>
                         </div>
 
                         <div>
@@ -477,7 +485,7 @@ function nds_staff_dashboard_improved() {
                                 <button type="button" id="uploadProfileBtn" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors duration-200">
                                     <i class="fas fa-upload"></i>Upload
                                 </button>
-                                <button type="button" id="removeProfileBtn" class="bg-red-100 hover:bg-red-200 text-red-700 font-medium py-2 px-4 rounded-lg flex items-center gap-2 transition-colors duration-200 hidden">
+                                <button type="button" id="removeProfileBtn" class="bg-red-100 hover:bg-red-200 text-red-700 font-medium py-2 px-4 rounded-lg items-center gap-2 transition-colors duration-200 hidden">
                                     <i class="fas fa-trash-alt"></i>Remove
                                 </button>
                             </div>
@@ -679,37 +687,40 @@ function nds_staff_dashboard_improved() {
         // Lecturer-specific academic selection (Faculty -> Program -> Qualification)
         const staffRole = document.getElementById('staffRole');
         const lecturerFields = document.getElementById('lecturerAcademicFields');
+        const addStaffForm = document.getElementById('addStaffForm');
         const facultySelect = document.getElementById('lecturerFaculty');
         const programSelect = document.getElementById('lecturerProgram');
         const qualificationSelect = document.getElementById('lecturerQualification');
+        const assignmentList = document.getElementById('lecturerAssignmentList');
+        const addAssignmentRowBtn = document.getElementById('addLecturerAssignmentRow');
         const programsData = <?php echo wp_json_encode($programs); ?>;
         const qualificationsData = <?php echo wp_json_encode($qualifications); ?>;
 
         function resetSelect(selectEl, placeholder) {
+            if (!selectEl) {
+                return;
+            }
+
             selectEl.innerHTML = `<option value="">${placeholder}</option>`;
             selectEl.value = '';
         }
 
-        function applyLecturerFieldState() {
-            if (!staffRole || !lecturerFields || !facultySelect || !programSelect || !qualificationSelect) return;
-
-            const isLecturer = (staffRole.value || '').toLowerCase() === 'lecturer';
-            lecturerFields.style.display = isLecturer ? '' : 'none';
-            facultySelect.required = isLecturer;
-            programSelect.required = isLecturer;
-            qualificationSelect.required = isLecturer;
-
-            if (!isLecturer) {
-                facultySelect.value = '';
-                resetSelect(programSelect, 'Select program...');
-                resetSelect(qualificationSelect, 'Select qualification...');
-                programSelect.disabled = true;
-                qualificationSelect.disabled = true;
+        function resetAssignmentSelectors() {
+            if (!facultySelect || !programSelect || !qualificationSelect) {
+                return;
             }
+
+            facultySelect.value = '';
+            resetSelect(programSelect, 'Select program...');
+            resetSelect(qualificationSelect, 'Select qualification...');
+            programSelect.disabled = true;
+            qualificationSelect.disabled = true;
         }
 
         function populatePrograms() {
-            if (!facultySelect || !programSelect || !qualificationSelect) return;
+            if (!facultySelect || !programSelect || !qualificationSelect) {
+                return;
+            }
 
             const facultyId = parseInt(facultySelect.value || '0', 10);
             resetSelect(programSelect, 'Select program...');
@@ -721,8 +732,11 @@ function nds_staff_dashboard_improved() {
                 return;
             }
 
-            const filteredPrograms = programsData.filter(p => parseInt(p.faculty_id, 10) === facultyId);
-            filteredPrograms.forEach(program => {
+            const filteredPrograms = programsData.filter(function(program) {
+                return parseInt(program.faculty_id, 10) === facultyId;
+            });
+
+            filteredPrograms.forEach(function(program) {
                 const option = document.createElement('option');
                 option.value = program.id;
                 option.textContent = program.name;
@@ -734,7 +748,9 @@ function nds_staff_dashboard_improved() {
         }
 
         function populateQualifications() {
-            if (!programSelect || !qualificationSelect) return;
+            if (!programSelect || !qualificationSelect) {
+                return;
+            }
 
             const programId = parseInt(programSelect.value || '0', 10);
             resetSelect(qualificationSelect, 'Select qualification...');
@@ -744,8 +760,11 @@ function nds_staff_dashboard_improved() {
                 return;
             }
 
-            const filteredQualifications = qualificationsData.filter(q => parseInt(q.program_id, 10) === programId);
-            filteredQualifications.forEach(qualification => {
+            const filteredQualifications = qualificationsData.filter(function(qualification) {
+                return parseInt(qualification.program_id, 10) === programId;
+            });
+
+            filteredQualifications.forEach(function(qualification) {
                 const option = document.createElement('option');
                 option.value = qualification.id;
                 option.textContent = qualification.name;
@@ -753,6 +772,75 @@ function nds_staff_dashboard_improved() {
             });
 
             qualificationSelect.disabled = filteredQualifications.length === 0;
+        }
+
+        function removeAssignmentItem(button) {
+            const assignmentItem = button ? button.closest('.lecturer-assignment-item') : null;
+            if (assignmentItem) {
+                assignmentItem.remove();
+            }
+        }
+
+        function addAssignmentToList() {
+            if (!facultySelect || !programSelect || !qualificationSelect || !assignmentList) {
+                return;
+            }
+
+            const facultyId = facultySelect.value || '';
+            const programId = programSelect.value || '';
+            const qualificationId = qualificationSelect.value || '';
+
+            if (!facultyId || !programId || !qualificationId) {
+                window.alert('Select faculty, program, and qualification before clicking Add.');
+                return;
+            }
+
+            const duplicate = assignmentList.querySelector(`input[name="lecturer_course_id[]"][value="${qualificationId}"]`);
+            if (duplicate) {
+                window.alert('That qualification has already been added.');
+                return;
+            }
+
+            const facultyLabel = facultySelect.options[facultySelect.selectedIndex].text;
+            const programLabel = programSelect.options[programSelect.selectedIndex].text;
+            const qualificationLabel = qualificationSelect.options[qualificationSelect.selectedIndex].text;
+
+            const item = document.createElement('div');
+            item.className = 'lecturer-assignment-item flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3';
+            item.innerHTML = `
+                <div class="text-sm text-gray-800">${facultyLabel} / ${programLabel} / ${qualificationLabel}</div>
+                <div class="flex items-center gap-2">
+                    <input type="hidden" name="lecturer_faculty_id[]" value="${facultyId}">
+                    <input type="hidden" name="lecturer_program_id[]" value="${programId}">
+                    <input type="hidden" name="lecturer_course_id[]" value="${qualificationId}">
+                    <button type="button" class="remove-assignment-row px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors duration-200">Remove</button>
+                </div>
+            `;
+
+            const removeBtn = item.querySelector('.remove-assignment-row');
+            removeBtn.addEventListener('click', function() {
+                removeAssignmentItem(removeBtn);
+            });
+
+            assignmentList.appendChild(item);
+            resetAssignmentSelectors();
+        }
+
+        function applyLecturerFieldState() {
+            if (!staffRole || !lecturerFields) return;
+
+            const isLecturer = (staffRole.value || '').toLowerCase() === 'lecturer';
+            lecturerFields.style.display = isLecturer ? '' : 'none';
+
+            if (!isLecturer) {
+                if (assignmentList) {
+                    assignmentList.innerHTML = '';
+                }
+                resetAssignmentSelectors();
+                return;
+            }
+
+            resetAssignmentSelectors();
         }
 
         if (staffRole) {
@@ -766,6 +854,27 @@ function nds_staff_dashboard_improved() {
 
         if (programSelect) {
             programSelect.addEventListener('change', populateQualifications);
+        }
+
+        if (addAssignmentRowBtn) {
+            addAssignmentRowBtn.addEventListener('click', function() {
+                addAssignmentToList();
+            });
+        }
+
+        if (addStaffForm) {
+            addStaffForm.addEventListener('submit', function(event) {
+                const isLecturer = staffRole && (staffRole.value || '').toLowerCase() === 'lecturer';
+                if (!isLecturer) {
+                    return;
+                }
+
+                const hasAddedAssignments = assignmentList && assignmentList.querySelector('input[name="lecturer_course_id[]"]');
+                if (!hasAddedAssignments) {
+                    event.preventDefault();
+                    window.alert('Click Add to link at least one faculty, program, and qualification before saving.');
+                }
+            });
         }
 
         // Search functionality
@@ -809,6 +918,7 @@ function nds_staff_dashboard_improved() {
                     preview.classList.remove('hidden');
                     placeholder.classList.add('hidden');
                     removeBtn.classList.remove('hidden');
+                    removeBtn.classList.add('flex');
                 });
 
                 mediaUploader.open();
@@ -822,6 +932,7 @@ function nds_staff_dashboard_improved() {
                 preview.classList.add('hidden');
                 placeholder.classList.remove('hidden');
                 removeBtn.classList.add('hidden');
+                removeBtn.classList.remove('flex');
             });
         }
     });

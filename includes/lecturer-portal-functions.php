@@ -115,6 +115,39 @@ function nds_staff_handle_upload($field_name = 'attachment_file') {
     return isset($uploaded['url']) ? esc_url_raw($uploaded['url']) : '';
 }
 
+function nds_staff_normalize_datetime($value) {
+    $value = is_string($value) ? trim($value) : '';
+    if ($value === '') {
+        return null;
+    }
+
+    $value = str_replace('T', ' ', $value);
+    $timestamp = strtotime($value);
+    if ($timestamp === false) {
+        return null;
+    }
+
+    return date('Y-m-d H:i:s', $timestamp);
+}
+
+function nds_staff_normalize_access_window($start_raw, $end_raw) {
+    $access_start = !empty($start_raw) ? nds_staff_normalize_datetime(wp_unslash($start_raw)) : null;
+    $access_end = !empty($end_raw) ? nds_staff_normalize_datetime(wp_unslash($end_raw)) : null;
+
+    if (!empty($access_start) && !empty($access_end)) {
+        $start_ts = strtotime($access_start);
+        $end_ts = strtotime($access_end);
+
+        // Avoid invisible content when the window is reversed or zero-length.
+        if ($start_ts !== false && $end_ts !== false && $end_ts <= $start_ts) {
+            $access_start = null;
+            $access_end = null;
+        }
+    }
+
+    return array($access_start, $access_end);
+}
+
 function nds_staff_ensure_portal_tables() {
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
@@ -335,8 +368,10 @@ add_action('admin_post_nds_staff_create_content', function () {
     $resource_url = isset($_POST['resource_url']) ? esc_url_raw(wp_unslash($_POST['resource_url'])) : '';
     $due_date = isset($_POST['due_date']) ? sanitize_text_field(wp_unslash($_POST['due_date'])) : null;
     $is_visible = !empty($_POST['is_visible']) ? 1 : 0;
-    $access_start = !empty($_POST['access_start']) ? sanitize_text_field(wp_unslash($_POST['access_start'])) : null;
-    $access_end = !empty($_POST['access_end']) ? sanitize_text_field(wp_unslash($_POST['access_end'])) : null;
+    list($access_start, $access_end) = nds_staff_normalize_access_window(
+        $_POST['access_start'] ?? '',
+        $_POST['access_end'] ?? ''
+    );
     $completion_required = !empty($_POST['completion_required']) ? 1 : 0;
     $min_grade_required = isset($_POST['min_grade_required']) && $_POST['min_grade_required'] !== '' ? (float) $_POST['min_grade_required'] : null;
 
@@ -434,8 +469,7 @@ add_action('admin_post_nds_staff_create_content', function () {
         }
     }
 
-    wp_safe_redirect(home_url('/staff-portal/?tab=content&content_notice=created'));
-    exit;
+    nds_staff_redirect_with_notice('content_notice', 'created', 'content');
 });
 
 add_action('admin_post_nds_staff_update_content', function () {
@@ -480,8 +514,10 @@ add_action('admin_post_nds_staff_update_content', function () {
     $resource_url = isset($_POST['resource_url']) ? esc_url_raw(wp_unslash($_POST['resource_url'])) : '';
     $due_date = isset($_POST['due_date']) ? sanitize_text_field(wp_unslash($_POST['due_date'])) : null;
     $is_visible = !empty($_POST['is_visible']) ? 1 : 0;
-    $access_start = !empty($_POST['access_start']) ? sanitize_text_field(wp_unslash($_POST['access_start'])) : null;
-    $access_end = !empty($_POST['access_end']) ? sanitize_text_field(wp_unslash($_POST['access_end'])) : null;
+    list($access_start, $access_end) = nds_staff_normalize_access_window(
+        $_POST['access_start'] ?? '',
+        $_POST['access_end'] ?? ''
+    );
     $completion_required = !empty($_POST['completion_required']) ? 1 : 0;
     $min_grade_required = isset($_POST['min_grade_required']) && $_POST['min_grade_required'] !== '' ? (float) $_POST['min_grade_required'] : null;
 
@@ -724,6 +760,87 @@ add_action('admin_post_nds_staff_grade_submission', function () {
         array('%f', '%s', '%s', '%s', '%d'),
         array('%d')
     );
+
+    nds_staff_redirect_with_notice('assessment_notice', 'graded', 'assessments');
+});
+
+add_action('admin_post_nds_staff_grade_content_assignment_submission', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_grade_content_assignment_submission_nonce']) || !wp_verify_nonce($_POST['nds_staff_grade_content_assignment_submission_nonce'], 'nds_staff_grade_content_assignment_submission')) {
+        nds_staff_redirect_with_notice('assessment_error', 'security', 'assessments');
+    }
+
+    $submission_id = isset($_POST['content_submission_id']) ? (int) $_POST['content_submission_id'] : 0;
+    if ($submission_id <= 0) {
+        nds_staff_redirect_with_notice('assessment_error', 'missing_fields', 'assessments');
+    }
+
+    if (!function_exists('nds_portal_ensure_assignment_submissions_table')) {
+        nds_staff_redirect_with_notice('assessment_error', 'save_failed', 'assessments');
+    }
+
+    global $wpdb;
+    $assignment_submissions_table = nds_portal_ensure_assignment_submissions_table();
+    $submission = $wpdb->get_row($wpdb->prepare(
+        "SELECT cs.id, cs.content_id, cs.course_id, cs.module_id, cs.student_id, lc.staff_id, lc.title AS assignment_title
+         FROM {$assignment_submissions_table} cs
+         INNER JOIN {$wpdb->prefix}nds_lecturer_content lc ON lc.id = cs.content_id
+         WHERE cs.id = %d
+         LIMIT 1",
+        $submission_id
+    ), ARRAY_A);
+
+    if (empty($submission) || (int) ($submission['staff_id'] ?? 0) !== (int) $staff_id || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) ($submission['course_id'] ?? 0))) {
+        nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
+    }
+
+    $score = isset($_POST['score']) && $_POST['score'] !== '' ? (float) $_POST['score'] : null;
+    $feedback = isset($_POST['feedback']) ? sanitize_textarea_field(wp_unslash($_POST['feedback'])) : '';
+
+    $update_data = array(
+        'score' => $score,
+        'feedback' => $feedback,
+        'status' => 'graded',
+        'graded_at' => current_time('mysql'),
+        'graded_by' => $staff_id,
+    );
+
+    $updated = $wpdb->update(
+        $assignment_submissions_table,
+        $update_data,
+        array('id' => $submission_id),
+        array('%f', '%s', '%s', '%s', '%d'),
+        array('%d')
+    );
+
+    if ($updated === false) {
+        nds_staff_redirect_with_notice('assessment_error', 'save_failed', 'assessments');
+    }
+
+    if (function_exists('nds_create_notification')) {
+        $portal_link = home_url('/portal/?tab=courses');
+        if ((int) ($submission['module_id'] ?? 0) > 0) {
+            $portal_link = add_query_arg(
+                array(
+                    'tab' => 'courses',
+                    'module_id' => (int) $submission['module_id'],
+                    'assignment_content_id' => (int) $submission['content_id'],
+                ),
+                home_url('/portal/')
+            );
+        }
+
+        $assignment_title = trim((string) ($submission['assignment_title'] ?? 'Assignment'));
+        $score_text = $score !== null ? (' Score: ' . number_format((float) $score, 2) . '.') : '';
+        nds_create_notification(
+            (int) ($submission['student_id'] ?? 0),
+            'Assignment reviewed',
+            $assignment_title . ' has been reviewed.' . $score_text,
+            'success',
+            $portal_link
+        );
+    }
 
     nds_staff_redirect_with_notice('assessment_notice', 'graded', 'assessments');
 });

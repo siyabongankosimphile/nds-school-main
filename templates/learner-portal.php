@@ -319,6 +319,7 @@ $active_semester_id = $active_year_id ? (int) $wpdb->get_var($wpdb->prepare(
 $learner_registered_modules = array();
 $module_content_by_module = array();
 $module_assessments_by_module = array();
+$course_assessments_by_course = array();
 
 if ($student_id > 0) {
     if (function_exists('nds_portal_ensure_student_modules_table')) {
@@ -410,8 +411,9 @@ if ($student_id > 0) {
     }
 
     $module_ids_for_feed = array_values(array_unique(array_map('intval', wp_list_pluck($learner_registered_modules, 'module_id'))));
+    $course_ids_for_feed = array_values(array_unique(array_filter(array_map('intval', wp_list_pluck($learner_registered_modules, 'course_id')))));
     if (!empty($module_ids_for_feed)) {
-        $placeholders = implode(',', array_fill(0, count($module_ids_for_feed), '%d'));
+        $module_placeholders = implode(',', array_fill(0, count($module_ids_for_feed), '%d'));
 
         $module_content_rows = $wpdb->get_results($wpdb->prepare(
             "SELECT lc.id, lc.module_id, lc.content_type, lc.title, lc.description,
@@ -419,7 +421,7 @@ if ($student_id > 0) {
                     m.name AS module_name
              FROM {$wpdb->prefix}nds_lecturer_content lc
              INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = lc.module_id
-             WHERE lc.module_id IN ({$placeholders})
+                         WHERE lc.module_id IN ({$module_placeholders})
                AND lc.is_visible = 1
                AND lc.status = 'published'
                AND (lc.access_start IS NULL OR lc.access_start <= NOW())
@@ -436,24 +438,37 @@ if ($student_id > 0) {
             $module_content_by_module[$mid][] = $content_row;
         }
 
-        $module_assessment_rows = $wpdb->get_results($wpdb->prepare(
-            "SELECT a.id, a.module_id, a.assessment_type, a.title, a.instructions,
-                    a.due_date, a.max_grade, a.attempts_allowed, a.status,
-                    m.name AS module_name
-             FROM {$wpdb->prefix}nds_assessments a
-             INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
-             WHERE a.module_id IN ({$placeholders})
-               AND a.status = 'published'
-             ORDER BY a.due_date ASC, a.created_at DESC",
-            $module_ids_for_feed
-        ), ARRAY_A);
+        $module_assessment_rows = array();
+        if (!empty($course_ids_for_feed)) {
+            $course_placeholders = implode(',', array_fill(0, count($course_ids_for_feed), '%d'));
+            $assessment_sql = "SELECT a.id, a.course_id, a.module_id, a.assessment_type, a.title, a.instructions,
+                                      a.due_date, a.max_grade, a.attempts_allowed, a.status,
+                                      m.name AS module_name
+                               FROM {$wpdb->prefix}nds_assessments a
+                               LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
+                               WHERE a.course_id IN ({$course_placeholders})
+                                 AND a.status = 'published'
+                               ORDER BY a.due_date ASC, a.created_at DESC";
+            $module_assessment_rows = $wpdb->get_results($wpdb->prepare($assessment_sql, $course_ids_for_feed), ARRAY_A);
+        }
 
         foreach ($module_assessment_rows as $assessment_row) {
             $mid = (int) ($assessment_row['module_id'] ?? 0);
-            if (!isset($module_assessments_by_module[$mid])) {
-                $module_assessments_by_module[$mid] = array();
+            if ($mid > 0) {
+                if (!isset($module_assessments_by_module[$mid])) {
+                    $module_assessments_by_module[$mid] = array();
+                }
+                $module_assessments_by_module[$mid][] = $assessment_row;
+            } else {
+                $cid = (int) ($assessment_row['course_id'] ?? 0);
+                if ($cid <= 0) {
+                    continue;
+                }
+                if (!isset($course_assessments_by_course[$cid])) {
+                    $course_assessments_by_course[$cid] = array();
+                }
+                $course_assessments_by_course[$cid][] = $assessment_row;
             }
-            $module_assessments_by_module[$mid][] = $assessment_row;
         }
     }
 }
@@ -925,7 +940,7 @@ $unread_count = count($unread_notifications);
                         'overview'     => array('icon' => 'fa-home', 'label' => 'Overview'),
                         'courses'      => array('icon' => 'fa-book', 'label' => 'Courses'),
                         'timetable'   => array('icon' => 'fa-calendar-alt', 'label' => 'Timetable'),
-                        'finances'    => array('icon' => 'fa-dollar-sign', 'label' => '$ Finances'),
+                        'finances'    => array('icon' => 'fa-money-bill-wave', 'label' => 'R Finances'),
                         'results'     => array('icon' => 'fa-chart-bar', 'label' => 'Results'),
                         'graduation'  => array('icon' => 'fa-graduation-cap', 'label' => 'Graduation'),
                         'certificates' => array('icon' => 'fa-certificate', 'label' => 'Certificates'),
@@ -973,9 +988,13 @@ $unread_count = count($unread_notifications);
                             'module_name'     => $lrm_row['module_name'] ?? 'Module',
                             'module_code'     => $lrm_row['module_code'] ?? '',
                             'course_name'     => $lrm_row['course_name'] ?? 'Course',
+                            'course_id'       => (int) ($lrm_row['course_id'] ?? 0),
                             'program_name'    => $lrm_row['program_name'] ?? '',
                             'content_rows'    => $module_content_by_module[$lrm_mid] ?? array(),
-                            'assessment_rows' => $module_assessments_by_module[$lrm_mid] ?? array(),
+                            'assessment_rows' => array_merge(
+                                $module_assessments_by_module[$lrm_mid] ?? array(),
+                                $course_assessments_by_course[(int) ($lrm_row['course_id'] ?? 0)] ?? array()
+                            ),
                         );
                     }
                 }
@@ -1290,6 +1309,82 @@ $unread_count = count($unread_notifications);
                         if (!empty($selected_module)) {
                             $module_content_rows    = $selected_module['content_rows']    ?? array();
                             $module_assessment_rows = $selected_module['assessment_rows'] ?? array();
+                            $selected_quiz_content_id = isset($_GET['quiz_content_id']) ? (int) $_GET['quiz_content_id'] : 0;
+                            $selected_assignment_content_id = isset($_GET['assignment_content_id']) ? (int) $_GET['assignment_content_id'] : 0;
+                            $selected_quiz_content = null;
+                            $selected_assignment_content = null;
+                            $selected_quiz_questions = array();
+                            $selected_quiz_attempts = array();
+                            $selected_assignment_submissions = array();
+                            $selected_quiz_pass_threshold = 50.0;
+
+                            if ($selected_assignment_content_id > 0) {
+                                foreach ($module_content_rows as $assignment_candidate) {
+                                    if ((int) ($assignment_candidate['id'] ?? 0) !== $selected_assignment_content_id) {
+                                        continue;
+                                    }
+
+                                    $candidate_type = strtolower((string) ($assignment_candidate['content_type'] ?? ''));
+                                    if ($candidate_type !== 'assignment') {
+                                        continue;
+                                    }
+
+                                    $selected_assignment_content = $assignment_candidate;
+                                    break;
+                                }
+                            }
+
+                            if ($selected_quiz_content_id > 0) {
+                                foreach ($module_content_rows as $quiz_candidate) {
+                                    if ((int) ($quiz_candidate['id'] ?? 0) !== $selected_quiz_content_id) {
+                                        continue;
+                                    }
+
+                                    $candidate_type = strtolower((string) ($quiz_candidate['content_type'] ?? ''));
+                                    if ($candidate_type !== 'quiz') {
+                                        continue;
+                                    }
+
+                                    $decoded_questions = json_decode((string) ($quiz_candidate['quiz_data'] ?? ''), true);
+                                    if (!is_array($decoded_questions) || empty($decoded_questions)) {
+                                        continue;
+                                    }
+
+                                    $selected_quiz_content = $quiz_candidate;
+                                    $selected_quiz_questions = $decoded_questions;
+                                    $selected_quiz_pass_threshold = isset($quiz_candidate['min_grade_required']) && $quiz_candidate['min_grade_required'] !== null
+                                        ? max(0.0, min(100.0, (float) $quiz_candidate['min_grade_required']))
+                                        : 50.0;
+                                    break;
+                                }
+                            }
+
+                            if (!empty($selected_quiz_content) && function_exists('nds_portal_ensure_quiz_attempts_table')) {
+                                $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+                                $selected_quiz_attempts = $wpdb->get_results($wpdb->prepare(
+                                    "SELECT attempt_no, total_questions, graded_questions, correct_answers, score_percent, submitted_at
+                                     FROM {$quiz_attempts_table}
+                                     WHERE content_id = %d AND student_id = %d
+                                     ORDER BY attempt_no DESC
+                                     LIMIT 10",
+                                    (int) $selected_quiz_content['id'],
+                                    (int) $student_id
+                                ), ARRAY_A);
+                            }
+
+                            if (!empty($selected_assignment_content) && function_exists('nds_portal_ensure_assignment_submissions_table')) {
+                                $assignment_submissions_table = nds_portal_ensure_assignment_submissions_table();
+                                $selected_assignment_submissions = $wpdb->get_results($wpdb->prepare(
+                                    "SELECT id, attempt_no, submitted_text, submission_link, file_url, file_name, file_size,
+                                            status, feedback, score, submitted_at, graded_at
+                                     FROM {$assignment_submissions_table}
+                                     WHERE content_id = %d AND student_id = %d
+                                     ORDER BY attempt_no DESC
+                                     LIMIT 10",
+                                    (int) $selected_assignment_content['id'],
+                                    (int) $student_id
+                                ), ARRAY_A);
+                            }
                             ?>
                             <div class="space-y-6">
                                 <div>
@@ -1297,6 +1392,226 @@ $unread_count = count($unread_notifications);
                                         <i class="fas fa-arrow-left mr-2"></i> Back to modules
                                     </a>
                                 </div>
+
+                                <?php if (!empty($selected_quiz_content) && !empty($selected_quiz_questions)) : ?>
+                                    <div class="bg-white border border-indigo-200 rounded-xl shadow-sm overflow-hidden" id="nds-quiz-attempt-panel">
+                                        <div class="bg-indigo-600 px-6 py-5 text-white">
+                                            <div class="text-xs uppercase tracking-widest text-indigo-100 font-semibold mb-1">Quiz Attempt</div>
+                                            <h3 class="text-xl font-semibold"><?php echo esc_html($selected_quiz_content['title'] ?? 'Quiz'); ?></h3>
+                                            <?php if (!empty($selected_quiz_content['description'])) : ?>
+                                                <p class="text-sm text-indigo-100 mt-1"><?php echo esc_html($selected_quiz_content['description']); ?></p>
+                                            <?php endif; ?>
+                                        </div>
+
+                                        <form id="nds-quiz-attempt-form" class="p-6 space-y-5" data-pass-threshold="<?php echo esc_attr($selected_quiz_pass_threshold); ?>">
+                                            <input type="hidden" name="action" value="nds_portal_submit_quiz_attempt">
+                                            <input type="hidden" name="nonce" value="<?php echo esc_attr(wp_create_nonce('nds_portal_quiz_nonce')); ?>">
+                                            <input type="hidden" name="content_id" value="<?php echo (int) $selected_quiz_content['id']; ?>">
+
+                                            <?php foreach ($selected_quiz_questions as $q_index => $quiz_question) : ?>
+                                                <?php
+                                                $question_text = trim((string) ($quiz_question['text'] ?? ''));
+                                                if ($question_text === '') {
+                                                    continue;
+                                                }
+                                                $question_type = sanitize_key((string) ($quiz_question['type'] ?? 'multiple_choice'));
+                                                ?>
+                                                <div class="nds-quiz-question rounded-lg border border-gray-200 p-4" data-question-index="<?php echo (int) $q_index; ?>" data-question-type="<?php echo esc_attr($question_type); ?>">
+                                                    <div class="nds-quiz-question-title text-sm font-semibold text-gray-800 mb-3"><?php echo esc_html(($q_index + 1) . '. ' . $question_text); ?></div>
+
+                                                    <?php if ($question_type === 'multiple_choice') : ?>
+                                                        <?php
+                                                        $letters = array('A', 'B', 'C', 'D');
+                                                        $options = is_array($quiz_question['options'] ?? null) ? $quiz_question['options'] : array();
+                                                        ?>
+                                                        <div class="space-y-2">
+                                                            <?php foreach ($letters as $letter_index => $letter) : ?>
+                                                                <?php $option_text = isset($options[$letter_index]) ? trim((string) $options[$letter_index]) : ''; ?>
+                                                                <?php if ($option_text === '') { continue; } ?>
+                                                                <label class="flex items-center gap-2 text-sm text-gray-700">
+                                                                    <input type="radio" name="answers[<?php echo (int) $q_index; ?>]" value="<?php echo esc_attr($letter); ?>" class="text-indigo-600 border-gray-300 focus:ring-indigo-500">
+                                                                    <span><strong><?php echo esc_html($letter); ?>.</strong> <?php echo esc_html($option_text); ?></span>
+                                                                </label>
+                                                            <?php endforeach; ?>
+                                                        </div>
+                                                    <?php else : ?>
+                                                        <textarea name="answers[<?php echo (int) $q_index; ?>]" rows="3" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="Type your answer..."></textarea>
+                                                    <?php endif; ?>
+                                                </div>
+                                            <?php endforeach; ?>
+
+                                            <div class="flex items-center justify-between gap-3">
+                                                <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-200">
+                                                    Submit Quiz
+                                                </button>
+                                                <div id="nds-quiz-attempt-feedback" class="text-sm text-gray-600"></div>
+                                            </div>
+                                        </form>
+
+                                        <div id="nds-quiz-review" class="hidden p-6 border-t border-indigo-100 bg-indigo-50"></div>
+
+                                        <div class="px-6 pb-6">
+                                            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                                <div class="flex items-center justify-between mb-2">
+                                                    <h4 class="text-sm font-semibold text-gray-800">Your Attempt History</h4>
+                                                    <span class="text-xs text-gray-500">Pass mark: <?php echo esc_html(rtrim(rtrim(number_format((float) $selected_quiz_pass_threshold, 2, '.', ''), '0'), '.')); ?>%</span>
+                                                </div>
+
+                                                <?php if (empty($selected_quiz_attempts)) : ?>
+                                                    <p class="text-sm text-gray-500">No attempts yet.</p>
+                                                <?php else : ?>
+                                                    <div class="space-y-2">
+                                                        <?php foreach ($selected_quiz_attempts as $attempt_row) : ?>
+                                                            <?php
+                                                            $score_val = isset($attempt_row['score_percent']) ? (float) $attempt_row['score_percent'] : null;
+                                                            $has_auto_score = $score_val !== null && (int) ($attempt_row['graded_questions'] ?? 0) > 0;
+                                                            $is_pass = $has_auto_score && $score_val >= $selected_quiz_pass_threshold;
+                                                            ?>
+                                                            <div class="flex items-center justify-between rounded-md bg-white border border-gray-200 px-3 py-2">
+                                                                <div class="text-sm text-gray-700">
+                                                                    <span class="font-medium">Attempt #<?php echo (int) ($attempt_row['attempt_no'] ?? 0); ?></span>
+                                                                    <span class="text-gray-400 mx-1">•</span>
+                                                                    <span><?php echo esc_html(date_i18n('j M Y H:i', strtotime((string) ($attempt_row['submitted_at'] ?? 'now')))); ?></span>
+                                                                </div>
+                                                                <div class="flex items-center gap-2">
+                                                                    <?php if ($has_auto_score) : ?>
+                                                                        <span class="text-sm font-semibold text-gray-800"><?php echo esc_html(number_format($score_val, 2)); ?>%</span>
+                                                                        <span class="text-[11px] font-semibold px-2 py-1 rounded <?php echo $is_pass ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700'; ?>">
+                                                                            <?php echo $is_pass ? 'Pass' : 'Fail'; ?>
+                                                                        </span>
+                                                                    <?php else : ?>
+                                                                        <span class="text-[11px] font-semibold px-2 py-1 rounded bg-amber-100 text-amber-700">Pending review</span>
+                                                                    <?php endif; ?>
+                                                                </div>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endif; ?>
+
+                                <?php if (!empty($selected_assignment_content)) : ?>
+                                    <div class="bg-white border border-orange-200 rounded-xl shadow-sm overflow-hidden" id="nds-assignment-view-panel">
+                                        <div class="bg-orange-600 px-6 py-5 text-white">
+                                            <div class="text-xs uppercase tracking-widest text-orange-100 font-semibold mb-1">Assignment</div>
+                                            <h3 class="text-xl font-semibold"><?php echo esc_html($selected_assignment_content['title'] ?? 'Assignment'); ?></h3>
+                                            <?php if (!empty($selected_assignment_content['due_date'])) : ?>
+                                                <p class="text-sm text-orange-100 mt-1">Due: <?php echo esc_html(date_i18n('j M Y H:i', strtotime((string) $selected_assignment_content['due_date']))); ?></p>
+                                            <?php endif; ?>
+                                        </div>
+                                        <div class="p-6 space-y-6">
+                                            <?php if (!empty($selected_assignment_content['description'])) : ?>
+                                                <div class="rounded-lg border border-orange-100 bg-orange-50 p-4">
+                                                    <h4 class="text-sm font-semibold text-orange-900 mb-1">Instructions</h4>
+                                                    <p class="text-sm text-gray-700 whitespace-pre-wrap"><?php echo esc_html((string) $selected_assignment_content['description']); ?></p>
+                                                </div>
+                                            <?php endif; ?>
+
+                                            <div class="flex flex-wrap items-center gap-3">
+                                                <?php if (!empty($selected_assignment_content['attachment_url'])) : ?>
+                                                    <a href="<?php echo esc_url($selected_assignment_content['attachment_url']); ?>" target="_blank" rel="noopener" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors duration-200">
+                                                        <i class="fas fa-download mr-2"></i> View uploaded file
+                                                    </a>
+                                                <?php endif; ?>
+                                                <?php if (!empty($selected_assignment_content['resource_url'])) : ?>
+                                                    <a href="<?php echo esc_url($selected_assignment_content['resource_url']); ?>" target="_blank" rel="noopener" class="inline-flex items-center px-4 py-2 bg-white border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 transition-colors duration-200">
+                                                        <i class="fas fa-link mr-2"></i> Open reference link
+                                                    </a>
+                                                <?php endif; ?>
+                                            </div>
+
+                                            <?php if (empty($selected_assignment_content['attachment_url']) && empty($selected_assignment_content['resource_url'])) : ?>
+                                                <p class="text-sm text-gray-600">No uploaded file or link is attached to this assignment yet.</p>
+                                            <?php endif; ?>
+
+                                            <div class="rounded-lg border border-orange-200 bg-orange-50 p-4">
+                                                <h4 class="text-sm font-semibold text-orange-900 mb-3">Submit your assignment</h4>
+                                                <form id="nds-assignment-submit-form" class="space-y-3" enctype="multipart/form-data">
+                                                    <input type="hidden" name="action" value="nds_portal_submit_assignment">
+                                                    <input type="hidden" name="nonce" value="<?php echo esc_attr(wp_create_nonce('nds_portal_assignment_nonce')); ?>">
+                                                    <input type="hidden" name="content_id" value="<?php echo (int) $selected_assignment_content['id']; ?>">
+
+                                                    <div>
+                                                        <label class="block text-xs font-semibold text-gray-700 mb-1">Message / Notes</label>
+                                                        <textarea name="submitted_text" rows="3" class="w-full px-3 py-2 border border-orange-200 rounded-lg text-sm" placeholder="Write a short note for your submission..."></textarea>
+                                                    </div>
+
+                                                    <div>
+                                                        <label class="block text-xs font-semibold text-gray-700 mb-1">Submission link (optional)</label>
+                                                        <input type="url" name="submission_link" class="w-full px-3 py-2 border border-orange-200 rounded-lg text-sm" placeholder="https://...">
+                                                    </div>
+
+                                                    <div>
+                                                        <label class="block text-xs font-semibold text-gray-700 mb-1">Upload file (optional)</label>
+                                                        <input type="file" name="assignment_file" class="w-full text-sm text-gray-700" accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.zip,.jpg,.jpeg,.png">
+                                                        <p class="text-[11px] text-gray-500 mt-1">Accepted: PDF, Office docs, TXT, ZIP, JPG, PNG (max 20MB)</p>
+                                                    </div>
+
+                                                    <div class="flex items-center justify-between gap-3">
+                                                        <button type="submit" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors duration-200">
+                                                            Submit Assignment
+                                                        </button>
+                                                        <div id="nds-assignment-submit-feedback" class="text-sm text-gray-600"></div>
+                                                    </div>
+                                                </form>
+
+                                                <div id="nds-assignment-review" class="hidden rounded-lg border border-orange-200 bg-white p-4 mt-3"></div>
+                                            </div>
+
+                                            <div class="rounded-lg border border-gray-200 bg-gray-50 p-4">
+                                                <div class="flex items-center justify-between mb-2">
+                                                    <h4 class="text-sm font-semibold text-gray-800">Your Submission History</h4>
+                                                </div>
+
+                                                <div id="nds-assignment-submission-history-list" class="space-y-2">
+                                                    <?php if (empty($selected_assignment_submissions)) : ?>
+                                                        <p id="nds-assignment-empty-history" class="text-sm text-gray-500">No submissions yet.</p>
+                                                    <?php else : ?>
+                                                        <?php foreach ($selected_assignment_submissions as $submission_row) : ?>
+                                                            <?php
+                                                            $submission_status = sanitize_key((string) ($submission_row['status'] ?? 'submitted'));
+                                                            $status_class = $submission_status === 'graded'
+                                                                ? 'bg-emerald-100 text-emerald-700'
+                                                                : ($submission_status === 'late' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700');
+                                                            ?>
+                                                            <div class="rounded-md bg-white border border-gray-200 px-3 py-3">
+                                                                <div class="flex items-center justify-between gap-2 mb-1">
+                                                                    <div class="text-sm text-gray-700">
+                                                                        <span class="font-medium">Attempt #<?php echo (int) ($submission_row['attempt_no'] ?? 0); ?></span>
+                                                                        <span class="text-gray-400 mx-1">•</span>
+                                                                        <span><?php echo esc_html(date_i18n('j M Y H:i', strtotime((string) ($submission_row['submitted_at'] ?? 'now')))); ?></span>
+                                                                    </div>
+                                                                    <span class="text-[11px] font-semibold px-2 py-1 rounded <?php echo esc_attr($status_class); ?>"><?php echo esc_html(ucfirst(str_replace('_', ' ', $submission_status))); ?></span>
+                                                                </div>
+
+                                                                <?php if (!empty($submission_row['submitted_text'])) : ?>
+                                                                    <p class="text-sm text-gray-700 whitespace-pre-wrap mb-1"><?php echo esc_html((string) $submission_row['submitted_text']); ?></p>
+                                                                <?php endif; ?>
+
+                                                                <div class="flex flex-wrap items-center gap-3 text-xs">
+                                                                    <?php if (!empty($submission_row['submission_link'])) : ?>
+                                                                        <a href="<?php echo esc_url($submission_row['submission_link']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Open submitted link</a>
+                                                                    <?php endif; ?>
+                                                                    <?php if (!empty($submission_row['file_url'])) : ?>
+                                                                        <a href="<?php echo esc_url($submission_row['file_url']); ?>" target="_blank" rel="noopener" class="text-orange-600 hover:underline font-medium">View uploaded file<?php echo !empty($submission_row['file_name']) ? ': ' . esc_html((string) $submission_row['file_name']) : ''; ?></a>
+                                                                    <?php endif; ?>
+                                                                </div>
+
+                                                                <?php if (!empty($submission_row['feedback'])) : ?>
+                                                                    <div class="mt-2 text-xs text-gray-700 bg-gray-50 border border-gray-200 rounded p-2">
+                                                                        <strong>Feedback:</strong> <?php echo esc_html((string) $submission_row['feedback']); ?>
+                                                                    </div>
+                                                                <?php endif; ?>
+                                                            </div>
+                                                        <?php endforeach; ?>
+                                                    <?php endif; ?>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                <?php endif; ?>
 
                                 <div class="bg-white border border-slate-200 rounded-xl overflow-hidden shadow-sm">
                                     <!-- Module header banner -->
@@ -1348,6 +1663,32 @@ $unread_count = count($unread_notifications);
                                                                     <p class="text-xs text-slate-400 mt-1"><i class="fas fa-clock mr-1"></i>Due: <?php echo esc_html(date_i18n('j M Y', strtotime($content_item['due_date']))); ?></p>
                                                                 <?php endif; ?>
                                                                 <div class="mt-1.5 flex gap-3 text-xs">
+                                                                    <?php if ($ctype === 'quiz') : ?>
+                                                                        <?php
+                                                                        $open_quiz_url = add_query_arg(
+                                                                            array(
+                                                                                'tab' => 'courses',
+                                                                                'module_id' => (int) $selected_module['module_id'],
+                                                                                'quiz_content_id' => (int) ($content_item['id'] ?? 0),
+                                                                            ),
+                                                                            home_url('/portal/')
+                                                                        );
+                                                                        ?>
+                                                                        <a href="<?php echo esc_url($open_quiz_url); ?>" class="text-indigo-600 hover:underline font-medium">Open quiz</a>
+                                                                    <?php endif; ?>
+                                                                    <?php if ($ctype === 'assignment') : ?>
+                                                                        <?php
+                                                                        $open_assignment_url = add_query_arg(
+                                                                            array(
+                                                                                'tab' => 'courses',
+                                                                                'module_id' => (int) $selected_module['module_id'],
+                                                                                'assignment_content_id' => (int) ($content_item['id'] ?? 0),
+                                                                            ),
+                                                                            home_url('/portal/')
+                                                                        );
+                                                                        ?>
+                                                                        <a href="<?php echo esc_url($open_assignment_url); ?>" class="text-orange-600 hover:underline font-medium">Open assignment</a>
+                                                                    <?php endif; ?>
                                                                     <?php if (!empty($content_item['resource_url'])) : ?>
                                                                         <a href="<?php echo esc_url($content_item['resource_url']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Open link</a>
                                                                     <?php endif; ?>
@@ -1776,6 +2117,260 @@ document.addEventListener('DOMContentLoaded', function() {
             .finally(function () {
                 registrationRun.disabled = false;
                 registrationRun.textContent = 'Apply';
+            });
+        });
+    }
+
+    const quizAttemptForm = document.getElementById('nds-quiz-attempt-form');
+    const quizAttemptFeedback = document.getElementById('nds-quiz-attempt-feedback');
+    const quizReviewPanel = document.getElementById('nds-quiz-review');
+    const assignmentSubmitForm = document.getElementById('nds-assignment-submit-form');
+    const assignmentSubmitFeedback = document.getElementById('nds-assignment-submit-feedback');
+    const assignmentHistoryList = document.getElementById('nds-assignment-submission-history-list');
+    const assignmentEmptyHistory = document.getElementById('nds-assignment-empty-history');
+    const assignmentReviewPanel = document.getElementById('nds-assignment-review');
+
+    function ndsEscapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    if (assignmentSubmitForm) {
+        function buildAssignmentReviewHtml(submissionData) {
+            const statusRaw = String(submissionData.status || 'submitted').toLowerCase();
+            const isLate = statusRaw === 'late' || submissionData.is_late === true;
+            const statusClass = isLate ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700';
+            const statusLabel = isLate ? 'Late submission' : 'Submitted';
+            const submittedAt = submissionData.submitted_at ? ndsEscapeHtml(submissionData.submitted_at) : 'Just now';
+            const submittedText = submissionData.submitted_text ? ndsEscapeHtml(submissionData.submitted_text) : '';
+            const submissionLink = submissionData.submission_link ? ndsEscapeHtml(submissionData.submission_link) : '';
+            const fileUrl = submissionData.file_url ? ndsEscapeHtml(submissionData.file_url) : '';
+            const fileName = submissionData.file_name ? ndsEscapeHtml(submissionData.file_name) : '';
+
+            return ''
+                + '<div class="flex items-center justify-between mb-2">'
+                + '  <h4 class="text-base font-semibold text-orange-900">Submission Review</h4>'
+                + '  <span class="text-[11px] font-semibold px-2 py-1 rounded ' + statusClass + '">' + statusLabel + '</span>'
+                + '</div>'
+                + '<div class="text-sm text-gray-700 mb-2">Attempt #' + (submissionData.attempt_no || 1) + ' submitted on ' + submittedAt + '</div>'
+                + (submittedText ? '<div class="text-sm text-gray-700 whitespace-pre-wrap mb-2">' + submittedText + '</div>' : '')
+                + '<div class="flex flex-wrap items-center gap-3 text-xs">'
+                + (submissionLink ? '<a href="' + submissionLink + '" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Open submitted link</a>' : '')
+                + (fileUrl ? '<a href="' + fileUrl + '" target="_blank" rel="noopener" class="text-orange-600 hover:underline font-medium">View uploaded file' + (fileName ? ': ' + fileName : '') + '</a>' : '')
+                + '</div>';
+        }
+
+        assignmentSubmitForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+
+            const submitButton = assignmentSubmitForm.querySelector('button[type="submit"]');
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = 'Submitting...';
+            }
+
+            if (assignmentSubmitFeedback) {
+                assignmentSubmitFeedback.className = 'text-sm text-gray-600';
+                assignmentSubmitFeedback.textContent = 'Submitting assignment...';
+            }
+
+            const payload = new FormData(assignmentSubmitForm);
+
+            fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
+                method: 'POST',
+                credentials: 'same-origin',
+                body: payload
+            })
+            .then(function (response) { return response.json(); })
+            .then(function (json) {
+                if (!json || !json.success) {
+                    const message = (json && json.data) ? String(json.data) : 'Could not submit assignment.';
+                    if (assignmentSubmitFeedback) {
+                        assignmentSubmitFeedback.className = 'text-sm text-red-600';
+                        assignmentSubmitFeedback.textContent = message;
+                    }
+                    return;
+                }
+
+                const data = json.data || {};
+                if (assignmentSubmitFeedback) {
+                    assignmentSubmitFeedback.className = 'text-sm text-emerald-700 font-medium';
+                    assignmentSubmitFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted successfully.';
+                }
+
+                if (assignmentReviewPanel) {
+                    assignmentReviewPanel.innerHTML = buildAssignmentReviewHtml(data);
+                    assignmentReviewPanel.classList.remove('hidden');
+                }
+
+                if (assignmentEmptyHistory) {
+                    assignmentEmptyHistory.remove();
+                }
+
+                if (assignmentHistoryList) {
+                    const submittedAt = data.submitted_at ? ndsEscapeHtml(data.submitted_at) : 'Just now';
+                    const submittedText = data.submitted_text ? ndsEscapeHtml(data.submitted_text) : '';
+                    const submissionLink = data.submission_link ? ndsEscapeHtml(data.submission_link) : '';
+                    const fileUrl = data.file_url ? ndsEscapeHtml(data.file_url) : '';
+                    const fileName = data.file_name ? ndsEscapeHtml(data.file_name) : '';
+
+                    const entry = document.createElement('div');
+                    entry.className = 'rounded-md bg-white border border-gray-200 px-3 py-3';
+                    entry.innerHTML = ''
+                        + '<div class="flex items-center justify-between gap-2 mb-1">'
+                        + '  <div class="text-sm text-gray-700"><span class="font-medium">Attempt #' + (data.attempt_no || 1) + '</span><span class="text-gray-400 mx-1">•</span><span>' + submittedAt + '</span></div>'
+                        + '  <span class="text-[11px] font-semibold px-2 py-1 rounded bg-blue-100 text-blue-700">Submitted</span>'
+                        + '</div>'
+                        + (submittedText ? '<p class="text-sm text-gray-700 whitespace-pre-wrap mb-1">' + submittedText + '</p>' : '')
+                        + '<div class="flex flex-wrap items-center gap-3 text-xs">'
+                        + (submissionLink ? '<a href="' + submissionLink + '" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Open submitted link</a>' : '')
+                        + (fileUrl ? '<a href="' + fileUrl + '" target="_blank" rel="noopener" class="text-orange-600 hover:underline font-medium">View uploaded file' + (fileName ? ': ' + fileName : '') + '</a>' : '')
+                        + '</div>';
+                    assignmentHistoryList.insertBefore(entry, assignmentHistoryList.firstChild);
+                }
+
+                assignmentSubmitForm.classList.add('hidden');
+            })
+            .catch(function () {
+                if (assignmentSubmitFeedback) {
+                    assignmentSubmitFeedback.className = 'text-sm text-red-600';
+                    assignmentSubmitFeedback.textContent = 'Could not submit assignment. Please try again.';
+                }
+            })
+            .finally(function () {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit Assignment';
+                }
+            });
+        });
+    }
+
+    if (quizAttemptForm) {
+        function buildQuizReviewHtml(attemptData) {
+            const hasAutoScore = attemptData.score_percent !== null && attemptData.score_percent !== undefined && attemptData.graded_questions > 0;
+            const statusText = attemptData.passed === true ? 'Pass' : (attemptData.passed === false ? 'Fail' : 'Pending review');
+            const statusClass = attemptData.passed === true
+                ? 'bg-emerald-100 text-emerald-700'
+                : (attemptData.passed === false ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700');
+
+            const questionBlocks = quizAttemptForm.querySelectorAll('.nds-quiz-question');
+            let answerRows = '';
+            questionBlocks.forEach(function (block) {
+                const titleEl = block.querySelector('.nds-quiz-question-title');
+                const title = titleEl ? titleEl.textContent.trim() : 'Question';
+                const type = block.getAttribute('data-question-type') || 'multiple_choice';
+                let answerText = 'No answer provided';
+
+                if (type === 'multiple_choice') {
+                    const checked = block.querySelector('input[type="radio"]:checked');
+                    if (checked) {
+                        const label = checked.closest('label');
+                        answerText = label ? label.textContent.trim() : checked.value;
+                    }
+                } else {
+                    const textArea = block.querySelector('textarea');
+                    if (textArea && textArea.value.trim() !== '') {
+                        answerText = textArea.value.trim();
+                    }
+                }
+
+                answerRows += '<div class="bg-white border border-indigo-100 rounded-md p-3">'
+                    + '<div class="text-xs font-semibold text-indigo-900 mb-1">' + title.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'
+                    + '<div class="text-sm text-gray-700 whitespace-pre-wrap">' + answerText.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'
+                    + '</div>';
+            });
+
+            const scoreText = hasAutoScore ? (attemptData.score_percent + '%') : 'Pending manual grading';
+
+            return ''
+                + '<div class="rounded-lg border border-indigo-200 bg-white p-4">'
+                + '  <div class="flex items-center justify-between mb-2">'
+                + '    <h4 class="text-base font-semibold text-indigo-900">Attempt Review</h4>'
+                + '    <span class="text-[11px] font-semibold px-2 py-1 rounded ' + statusClass + '">' + statusText + '</span>'
+                + '  </div>'
+                + '  <div class="text-sm text-gray-700 mb-3">Attempt #' + (attemptData.attempt_no || 1) + ' submitted. Score: <strong>' + scoreText + '</strong></div>'
+                + '  <div class="space-y-2">' + answerRows + '</div>'
+                + '</div>';
+        }
+
+        quizAttemptForm.addEventListener('submit', function (event) {
+            event.preventDefault();
+
+            const submitButton = quizAttemptForm.querySelector('button[type="submit"]');
+            if (submitButton) {
+                submitButton.disabled = true;
+                submitButton.textContent = 'Submitting...';
+            }
+
+            if (quizAttemptFeedback) {
+                quizAttemptFeedback.className = 'text-sm text-gray-600';
+                quizAttemptFeedback.textContent = 'Submitting your attempt...';
+            }
+
+            const payload = new URLSearchParams(new FormData(quizAttemptForm));
+
+            fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
+                method: 'POST',
+                credentials: 'same-origin',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: payload.toString()
+            })
+            .then(function (response) { return response.json(); })
+            .then(function (json) {
+                if (!json || !json.success) {
+                    const message = (json && json.data) ? String(json.data) : 'Could not submit quiz attempt.';
+                    if (quizAttemptFeedback) {
+                        quizAttemptFeedback.className = 'text-sm text-red-600';
+                        quizAttemptFeedback.textContent = message;
+                    }
+                    return;
+                }
+
+                const data = json.data || {};
+                const score = data.score_percent !== null && data.score_percent !== undefined
+                    ? data.score_percent + '%'
+                    : 'Pending manual grading';
+                const thresholdRaw = quizAttemptForm.getAttribute('data-pass-threshold');
+                const threshold = thresholdRaw ? parseFloat(thresholdRaw) : 50;
+                const hasAutoScore = data.score_percent !== null && data.score_percent !== undefined && data.graded_questions > 0;
+                const passed = hasAutoScore ? parseFloat(data.score_percent) >= threshold : null;
+
+                if (quizAttemptFeedback) {
+                    if (passed === true) {
+                        quizAttemptFeedback.className = 'text-sm text-emerald-700 font-medium';
+                        quizAttemptFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score + ' (Pass)';
+                    } else if (passed === false) {
+                        quizAttemptFeedback.className = 'text-sm text-rose-700 font-medium';
+                        quizAttemptFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score + ' (Fail)';
+                    } else {
+                        quizAttemptFeedback.className = 'text-sm text-amber-700 font-medium';
+                        quizAttemptFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score;
+                    }
+                }
+
+                if (quizReviewPanel) {
+                    quizReviewPanel.innerHTML = buildQuizReviewHtml(data);
+                    quizReviewPanel.classList.remove('hidden');
+                }
+
+                quizAttemptForm.classList.add('hidden');
+            })
+            .catch(function () {
+                if (quizAttemptFeedback) {
+                    quizAttemptFeedback.className = 'text-sm text-red-600';
+                    quizAttemptFeedback.textContent = 'Could not submit quiz attempt. Please try again.';
+                }
+            })
+            .finally(function () {
+                if (submitButton) {
+                    submitButton.disabled = false;
+                    submitButton.textContent = 'Submit Quiz';
+                }
             });
         });
     }

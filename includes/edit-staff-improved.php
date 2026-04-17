@@ -59,12 +59,17 @@ function nds_edit_staff_page_improved() {
     global $wpdb;
     $course_table = $wpdb->prefix . 'nds_courses';
     $link_table = $wpdb->prefix . 'nds_course_lecturers';
+    $faculties = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_faculties WHERE status = 'active' ORDER BY name", ARRAY_A);
+    $programs = $wpdb->get_results("SELECT id, name, faculty_id FROM {$wpdb->prefix}nds_programs WHERE status = 'active' ORDER BY name", ARRAY_A);
+    $qualifications = $wpdb->get_results("SELECT id, name, program_id FROM {$wpdb->prefix}nds_courses WHERE status = 'active' ORDER BY name", ARRAY_A);
 
     // Get staff assignments
     $assignments = $wpdb->get_results($wpdb->prepare(
-        "SELECT c.name AS course_name, l.assigned_date, c.id as course_id
+        "SELECT c.name AS course_name, l.assigned_date, c.id as course_id, c.program_id, p.name AS program_name, p.faculty_id, f.name AS faculty_name
          FROM {$link_table} l
          JOIN {$course_table} c ON c.id = l.course_id
+         LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
+         LEFT JOIN {$wpdb->prefix}nds_faculties f ON f.id = p.faculty_id
          WHERE l.lecturer_id = %d
          ORDER BY l.assigned_date DESC",
         $staff_id
@@ -250,7 +255,7 @@ function nds_edit_staff_page_improved() {
 
                                 <div>
                                     <label class="block text-xs font-medium text-gray-700 mb-1.5">Role *</label>
-                                    <select name="role" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" required>
+                                    <select name="role" id="editStaffRole" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" required>
                                         <option value="">Select role...</option>
                                         <?php
                                         $available_roles = nds_get_staff_roles();
@@ -273,6 +278,62 @@ function nds_edit_staff_page_improved() {
                                     <label class="block text-xs font-medium text-gray-700 mb-1.5">Address</label>
                                     <input type="text" name="address" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                                            value="<?php echo esc_attr($staff['address'] ?? 'Vaal Triangle'); ?>">
+                                </div>
+
+                                <div id="lecturerAcademicFields" class="md:col-span-2 <?php echo strtolower((string) $staff['role']) === 'lecturer' ? '' : 'hidden'; ?>">
+                                    <div class="rounded-lg border border-blue-100 bg-blue-50 p-4 mb-4">
+                                        <p class="text-sm text-blue-900">Assign faculty, program, and qualification for this lecturer.</p>
+                                    </div>
+
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-700 mb-1.5">Faculty *</label>
+                                            <select id="lecturerFaculty" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
+                                                <option value="">Select faculty...</option>
+                                                <?php foreach ($faculties as $faculty): ?>
+                                                    <option value="<?php echo intval($faculty['id']); ?>"><?php echo esc_html($faculty['name']); ?></option>
+                                                <?php endforeach; ?>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-700 mb-1.5">Program *</label>
+                                            <select id="lecturerProgram" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
+                                                <option value="">Select program...</option>
+                                            </select>
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-700 mb-1.5">Qualification *</label>
+                                            <select id="lecturerQualification" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
+                                                <option value="">Select qualification...</option>
+                                            </select>
+                                        </div>
+                                    </div>
+
+                                    <div class="mt-3">
+                                        <button type="button" id="addLecturerAssignment" class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors duration-200 text-sm">
+                                            Add
+                                        </button>
+                                    </div>
+
+                                    <div id="lecturerAssignmentList" class="mt-3 space-y-2">
+                                        <?php foreach ($assignments as $assignment): ?>
+                                            <?php if (!empty($assignment['faculty_id']) && !empty($assignment['program_id']) && !empty($assignment['course_id'])): ?>
+                                                <div class="lecturer-assignment-item flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
+                                                    <div class="text-sm text-gray-800">
+                                                        <?php echo esc_html(($assignment['faculty_name'] ?: 'Unknown faculty') . ' / ' . ($assignment['program_name'] ?: 'Unknown program') . ' / ' . $assignment['course_name']); ?>
+                                                    </div>
+                                                    <div class="flex items-center gap-2">
+                                                        <input type="hidden" name="lecturer_faculty_id[]" value="<?php echo intval($assignment['faculty_id']); ?>">
+                                                        <input type="hidden" name="lecturer_program_id[]" value="<?php echo intval($assignment['program_id']); ?>">
+                                                        <input type="hidden" name="lecturer_course_id[]" value="<?php echo intval($assignment['course_id']); ?>">
+                                                        <button type="button" class="remove-assignment-row px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors duration-200 text-sm">Remove</button>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                        <?php endforeach; ?>
+                                    </div>
                                 </div>
                             </div>
 
@@ -370,7 +431,7 @@ function nds_edit_staff_page_improved() {
                                             <input type="hidden" name="action" value="nds_unassign_lecturer">
                                             <input type="hidden" name="lecturer_id" value="<?php echo intval($staff['id']); ?>">
                                             <input type="hidden" name="course_id" value="<?php echo intval($assignment['course_id']); ?>">
-                                            <button type="submit" class="text-red-500 hover:text-red-700 text-xs" title="Unassign">
+                                            <button type="submit" class="text-red-500 hover:text-red-700 text-xs" title="Unassign" onclick="return window.confirm('Remove this qualification assignment?');">
                                                 <i class="fas fa-times"></i>
                                             </button>
                                         </form>
@@ -424,6 +485,175 @@ function nds_edit_staff_page_improved() {
 
     <script>
     document.addEventListener('DOMContentLoaded', function() {
+        const roleSelect = document.getElementById('editStaffRole');
+        const lecturerFields = document.getElementById('lecturerAcademicFields');
+        const editForm = document.getElementById('editStaffForm');
+        const facultySelect = document.getElementById('lecturerFaculty');
+        const programSelect = document.getElementById('lecturerProgram');
+        const qualificationSelect = document.getElementById('lecturerQualification');
+        const addAssignmentBtn = document.getElementById('addLecturerAssignment');
+        const assignmentList = document.getElementById('lecturerAssignmentList');
+        const programsData = <?php echo wp_json_encode($programs); ?>;
+        const qualificationsData = <?php echo wp_json_encode($qualifications); ?>;
+
+        function resetSelect(selectEl, placeholder) {
+            if (!selectEl) {
+                return;
+            }
+
+            selectEl.innerHTML = `<option value="">${placeholder}</option>`;
+            selectEl.value = '';
+        }
+
+        function resetAssignmentSelectors() {
+            if (!facultySelect || !programSelect || !qualificationSelect) {
+                return;
+            }
+
+            facultySelect.value = '';
+            resetSelect(programSelect, 'Select program...');
+            resetSelect(qualificationSelect, 'Select qualification...');
+            programSelect.disabled = true;
+            qualificationSelect.disabled = true;
+        }
+
+        function populatePrograms() {
+            if (!facultySelect || !programSelect || !qualificationSelect) {
+                return;
+            }
+
+            const facultyId = parseInt(facultySelect.value || '0', 10);
+            resetSelect(programSelect, 'Select program...');
+            resetSelect(qualificationSelect, 'Select qualification...');
+
+            if (!facultyId) {
+                programSelect.disabled = true;
+                qualificationSelect.disabled = true;
+                return;
+            }
+
+            const filteredPrograms = programsData.filter(function(program) {
+                return parseInt(program.faculty_id, 10) === facultyId;
+            });
+
+            filteredPrograms.forEach(function(program) {
+                const option = document.createElement('option');
+                option.value = program.id;
+                option.textContent = program.name;
+                programSelect.appendChild(option);
+            });
+
+            programSelect.disabled = filteredPrograms.length === 0;
+            qualificationSelect.disabled = true;
+        }
+
+        function populateQualifications() {
+            if (!programSelect || !qualificationSelect) {
+                return;
+            }
+
+            const programId = parseInt(programSelect.value || '0', 10);
+            resetSelect(qualificationSelect, 'Select qualification...');
+
+            if (!programId) {
+                qualificationSelect.disabled = true;
+                return;
+            }
+
+            const filteredQualifications = qualificationsData.filter(function(qualification) {
+                return parseInt(qualification.program_id, 10) === programId;
+            });
+
+            filteredQualifications.forEach(function(qualification) {
+                const option = document.createElement('option');
+                option.value = qualification.id;
+                option.textContent = qualification.name;
+                qualificationSelect.appendChild(option);
+            });
+
+            qualificationSelect.disabled = filteredQualifications.length === 0;
+        }
+
+        function removeAssignmentItem(button) {
+            const assignmentItem = button ? button.closest('.lecturer-assignment-item') : null;
+            if (assignmentItem) {
+                const confirmed = window.confirm('Remove this qualification from the lecturer assignment list?');
+                if (!confirmed) {
+                    return;
+                }
+
+                assignmentItem.remove();
+            }
+        }
+
+        function attachRemoveHandlers() {
+            if (!assignmentList) {
+                return;
+            }
+
+            assignmentList.querySelectorAll('.remove-assignment-row').forEach(function(button) {
+                button.addEventListener('click', function() {
+                    removeAssignmentItem(button);
+                });
+            });
+        }
+
+        function addAssignmentToList() {
+            if (!facultySelect || !programSelect || !qualificationSelect || !assignmentList) {
+                return;
+            }
+
+            const facultyId = facultySelect.value || '';
+            const programId = programSelect.value || '';
+            const qualificationId = qualificationSelect.value || '';
+
+            if (!facultyId || !programId || !qualificationId) {
+                window.alert('Select faculty, program, and qualification before clicking Add.');
+                return;
+            }
+
+            const duplicate = assignmentList.querySelector(`input[name="lecturer_course_id[]"][value="${qualificationId}"]`);
+            if (duplicate) {
+                window.alert('That qualification has already been added.');
+                return;
+            }
+
+            const facultyLabel = facultySelect.options[facultySelect.selectedIndex].text;
+            const programLabel = programSelect.options[programSelect.selectedIndex].text;
+            const qualificationLabel = qualificationSelect.options[qualificationSelect.selectedIndex].text;
+
+            const item = document.createElement('div');
+            item.className = 'lecturer-assignment-item flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3';
+            item.innerHTML = `
+                <div class="text-sm text-gray-800">${facultyLabel} / ${programLabel} / ${qualificationLabel}</div>
+                <div class="flex items-center gap-2">
+                    <input type="hidden" name="lecturer_faculty_id[]" value="${facultyId}">
+                    <input type="hidden" name="lecturer_program_id[]" value="${programId}">
+                    <input type="hidden" name="lecturer_course_id[]" value="${qualificationId}">
+                    <button type="button" class="remove-assignment-row px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors duration-200 text-sm">Remove</button>
+                </div>
+            `;
+
+            assignmentList.appendChild(item);
+            attachRemoveHandlers();
+            resetAssignmentSelectors();
+        }
+
+        function applyLecturerFieldState() {
+            if (!roleSelect || !lecturerFields) {
+                return;
+            }
+
+            const isLecturer = (roleSelect.value || '').toLowerCase() === 'lecturer';
+            lecturerFields.classList.toggle('hidden', !isLecturer);
+
+            if (!isLecturer && assignmentList) {
+                assignmentList.innerHTML = '';
+            }
+
+            resetAssignmentSelectors();
+        }
+
         // Auto-generate email
         const firstNameInput = document.querySelector('input[name="first_name"]');
         const emailInput = document.getElementById('staffEmail');
@@ -498,10 +728,43 @@ function nds_edit_staff_page_improved() {
 
         // Save button handler
         const saveBtn = document.getElementById('saveBtn');
-        const editForm = document.getElementById('editStaffForm');
         if (saveBtn && editForm) {
             saveBtn.addEventListener('click', function() {
                 editForm.submit();
+            });
+        }
+
+        if (roleSelect) {
+            roleSelect.addEventListener('change', applyLecturerFieldState);
+            applyLecturerFieldState();
+        }
+
+        if (facultySelect) {
+            facultySelect.addEventListener('change', populatePrograms);
+        }
+
+        if (programSelect) {
+            programSelect.addEventListener('change', populateQualifications);
+        }
+
+        if (addAssignmentBtn) {
+            addAssignmentBtn.addEventListener('click', addAssignmentToList);
+        }
+
+        attachRemoveHandlers();
+
+        if (editForm) {
+            editForm.addEventListener('submit', function(event) {
+                const isLecturer = roleSelect && (roleSelect.value || '').toLowerCase() === 'lecturer';
+                if (!isLecturer) {
+                    return;
+                }
+
+                const hasAssignments = assignmentList && assignmentList.querySelector('input[name="lecturer_course_id[]"]');
+                if (!hasAssignments) {
+                    event.preventDefault();
+                    window.alert('Add at least one faculty, program, and qualification before saving.');
+                }
             });
         }
     });

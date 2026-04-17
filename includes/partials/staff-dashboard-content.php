@@ -116,7 +116,7 @@ $type_labels = array(
             <?php if (empty($courses_for_form)) : ?>
                 <div class="text-sm text-gray-600">No qualifications are assigned to you yet.</div>
             <?php else : ?>
-                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <form method="post" action="<?php echo esc_url(nds_staff_portal_tab_url('content')); ?>" enctype="multipart/form-data" class="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <?php if (!empty($edit_item)) : ?>
                         <?php wp_nonce_field('nds_staff_update_content', 'nds_staff_update_content_nonce'); ?>
                         <input type="hidden" name="action" value="nds_staff_update_content">
@@ -202,7 +202,7 @@ $type_labels = array(
                             <div id="nds-q-card"></div>
 
                             <!-- Prev / Next navigation -->
-                            <div id="nds-q-nav" class="hidden flex items-center justify-between mt-4 pt-3 border-t border-indigo-200">
+                            <div id="nds-q-nav" class="hidden items-center justify-between mt-4 pt-3 border-t border-indigo-200" style="display:none;">
                                 <button type="button" id="nds-prev-btn" onclick="ndsNavQ(-1)" class="flex items-center gap-1 px-3 py-1.5 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed">&larr; Previous</button>
                                 <span id="nds-q-counter" class="text-xs text-indigo-500 font-medium"></span>
                                 <button type="button" id="nds-next-btn" onclick="ndsNavQ(1)" class="flex items-center gap-1 px-3 py-1.5 text-sm text-indigo-700 border border-indigo-300 rounded-lg hover:bg-indigo-100 disabled:opacity-40 disabled:cursor-not-allowed">Next &rarr;</button>
@@ -341,7 +341,7 @@ $type_labels = array(
                                 <a href="<?php echo esc_url(add_query_arg('edit_content_id', (int) $item['id'], nds_staff_portal_tab_url('content'))); ?>" class="text-indigo-600 hover:text-indigo-800">
                                     <i class="fas fa-pen mr-1"></i>Edit
                                 </a>
-                                <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" onsubmit="return confirm('Delete this content item?');" class="inline">
+                                <form method="post" action="<?php echo esc_url(nds_staff_portal_tab_url('content')); ?>" onsubmit="return confirm('Delete this content item?');" class="inline">
                                     <?php wp_nonce_field('nds_staff_delete_content', 'nds_staff_delete_content_nonce'); ?>
                                     <input type="hidden" name="action" value="nds_staff_delete_content">
                                     <input type="hidden" name="content_id" value="<?php echo esc_attr($item['id']); ?>">

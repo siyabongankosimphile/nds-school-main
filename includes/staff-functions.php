@@ -50,6 +50,70 @@ function nds_staff_data_formats(array $data) {
     return $formats;
 }
 
+function nds_parse_staff_lecturer_assignments($request_data) {
+    $faculty_ids = isset($request_data['lecturer_faculty_id']) ? (array) $request_data['lecturer_faculty_id'] : array();
+    $program_ids = isset($request_data['lecturer_program_id']) ? (array) $request_data['lecturer_program_id'] : array();
+    $course_ids = isset($request_data['lecturer_course_id']) ? (array) $request_data['lecturer_course_id'] : array();
+
+    if (empty($faculty_ids) && empty($program_ids) && empty($course_ids)) {
+        $faculty_id = isset($request_data['faculty_id']) ? intval($request_data['faculty_id']) : 0;
+        $program_id = isset($request_data['program_id']) ? intval($request_data['program_id']) : 0;
+        $course_id = isset($request_data['course_id']) ? intval($request_data['course_id']) : 0;
+
+        if ($faculty_id > 0 || $program_id > 0 || $course_id > 0) {
+            $faculty_ids = array($faculty_id);
+            $program_ids = array($program_id);
+            $course_ids = array($course_id);
+        }
+    }
+
+    $row_count = max(count($faculty_ids), count($program_ids), count($course_ids));
+    $assignments = array();
+
+    for ($index = 0; $index < $row_count; $index++) {
+        $faculty_id = isset($faculty_ids[$index]) ? intval($faculty_ids[$index]) : 0;
+        $program_id = isset($program_ids[$index]) ? intval($program_ids[$index]) : 0;
+        $course_id = isset($course_ids[$index]) ? intval($course_ids[$index]) : 0;
+
+        if ($faculty_id === 0 && $program_id === 0 && $course_id === 0) {
+            continue;
+        }
+
+        if ($faculty_id <= 0 || $program_id <= 0 || $course_id <= 0) {
+            return new WP_Error('invalid_assignment', 'Each lecturer assignment must include faculty, program, and qualification.');
+        }
+
+        $assignments[$course_id] = array(
+            'faculty_id' => $faculty_id,
+            'program_id' => $program_id,
+            'course_id' => $course_id,
+        );
+    }
+
+    return array_values($assignments);
+}
+
+function nds_sync_staff_lecturer_assignments($staff_id, array $lecturer_assignments) {
+    global $wpdb;
+
+    $link_table = $wpdb->prefix . 'nds_course_lecturers';
+    $staff_id = intval($staff_id);
+
+    if ($staff_id <= 0) {
+        return;
+    }
+
+    $wpdb->delete($link_table, array('lecturer_id' => $staff_id), array('%d'));
+
+    foreach ($lecturer_assignments as $assignment) {
+        $wpdb->query($wpdb->prepare(
+            "INSERT IGNORE INTO {$link_table} (course_id, lecturer_id) VALUES (%d, %d)",
+            intval($assignment['course_id']),
+            $staff_id
+        ));
+    }
+}
+
 // ✅ Handle the repetitive logic for fetching staff data
 function nds_handle_staff_data($request_type = 'POST')
 {
@@ -207,13 +271,24 @@ function nds_add_staff()
     nds_ensure_staff_academic_columns();
     $data = nds_handle_staff_data('POST');
     $is_lecturer = strtolower(trim((string) $data['role'])) === 'lecturer';
+    $lecturer_assignments = $is_lecturer ? nds_parse_staff_lecturer_assignments($_POST) : array();
 
     if (empty($data['first_name']) || empty($data['last_name']) || empty($data['email']) || empty($data['role'])) {
         wp_die('Required fields are missing.');
     }
 
-    if ($is_lecturer && (empty($data['faculty_id']) || empty($data['program_id']) || empty($data['course_id']))) {
-        wp_die('Faculty, program, and qualification are required when adding a lecturer.');
+    if (is_wp_error($lecturer_assignments)) {
+        wp_die($lecturer_assignments->get_error_message());
+    }
+
+    if ($is_lecturer && empty($lecturer_assignments)) {
+        wp_die('At least one faculty, program, and qualification selection is required when adding a lecturer.');
+    }
+
+    if ($is_lecturer && !empty($lecturer_assignments[0])) {
+        $data['faculty_id'] = $lecturer_assignments[0]['faculty_id'];
+        $data['program_id'] = $lecturer_assignments[0]['program_id'];
+        $data['course_id'] = $lecturer_assignments[0]['course_id'];
     }
 
     // Check if email is already used in wp_users
@@ -268,12 +343,14 @@ function nds_add_staff()
         exit;
     }
 
-    if ($is_lecturer && !empty($data['course_id'])) {
-        $wpdb->query($wpdb->prepare(
-            "INSERT IGNORE INTO {$wpdb->prefix}nds_course_lecturers (course_id, lecturer_id) VALUES (%d, %d)",
-            intval($data['course_id']),
-            intval($wpdb->insert_id)
-        ));
+    if ($is_lecturer && !empty($lecturer_assignments)) {
+        foreach ($lecturer_assignments as $assignment) {
+            $wpdb->query($wpdb->prepare(
+                "INSERT IGNORE INTO {$wpdb->prefix}nds_course_lecturers (course_id, lecturer_id) VALUES (%d, %d)",
+                intval($assignment['course_id']),
+                intval($wpdb->insert_id)
+            ));
+        }
     }
 
     // Redirect after successful insertion
@@ -312,10 +389,32 @@ function nds_handle_update_staff()
     nds_ensure_staff_academic_columns();
     $staff_id = intval($_POST['staff_id']);
     $data = nds_handle_staff_data('POST');
+    $is_lecturer = strtolower(trim((string) $data['role'])) === 'lecturer';
+    $lecturer_assignments = $is_lecturer ? nds_parse_staff_lecturer_assignments($_POST) : array();
     unset($data['user_id'], $data['created_at']);
 
     if (empty($staff_id)) {
         wp_die('Invalid staff ID.');
+    }
+
+    if (is_wp_error($lecturer_assignments)) {
+        wp_die($lecturer_assignments->get_error_message());
+    }
+
+    if ($is_lecturer && empty($lecturer_assignments)) {
+        wp_die('At least one faculty, program, and qualification is required for a lecturer.');
+    }
+
+    if ($is_lecturer && !empty($lecturer_assignments[0])) {
+        $data['faculty_id'] = $lecturer_assignments[0]['faculty_id'];
+        $data['program_id'] = $lecturer_assignments[0]['program_id'];
+        $data['course_id'] = $lecturer_assignments[0]['course_id'];
+    }
+
+    if (!$is_lecturer) {
+        $data['faculty_id'] = 0;
+        $data['program_id'] = 0;
+        $data['course_id'] = 0;
     }
 
     // Get old values for audit trail
@@ -324,6 +423,12 @@ function nds_handle_update_staff()
     if ($updated === false) {
         wp_redirect(admin_url('admin.php?page=nds-edit-staff&staff_id=' . $staff_id . '&error=' . urlencode('update_failed')));
         exit;
+    }
+
+    if ($is_lecturer) {
+        nds_sync_staff_lecturer_assignments($staff_id, $lecturer_assignments);
+    } else {
+        nds_sync_staff_lecturer_assignments($staff_id, array());
     }
 
     // Log update action

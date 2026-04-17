@@ -150,6 +150,13 @@ add_action('init', function () {
         return;
     }
 
+    // Front-end forms post to wp-admin/admin-post.php; do not block those requests.
+    $script_name = isset($_SERVER['SCRIPT_NAME']) ? wp_unslash($_SERVER['SCRIPT_NAME']) : '';
+    $request_uri = isset($_SERVER['REQUEST_URI']) ? wp_unslash($_SERVER['REQUEST_URI']) : '';
+    if (($script_name !== '' && basename($script_name) === 'admin-post.php') || strpos($request_uri, '/wp-admin/admin-post.php') !== false) {
+        return;
+    }
+
     // Let WordPress handle non-logged-in users (login screen, etc.)
     if (!is_user_logged_in()) {
         return;
@@ -737,6 +744,434 @@ function nds_portal_ensure_student_modules_table() {
 
     return $table;
 }
+
+/**
+ * Ensure learner quiz attempts table exists.
+ */
+function nds_portal_ensure_quiz_attempts_table() {
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'nds_quiz_attempts';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        content_id BIGINT UNSIGNED NOT NULL,
+        student_id INT NOT NULL,
+        module_id INT NOT NULL,
+        course_id INT NOT NULL,
+        attempt_no INT NOT NULL DEFAULT 1,
+        total_questions INT NOT NULL DEFAULT 0,
+        graded_questions INT NOT NULL DEFAULT 0,
+        correct_answers INT NOT NULL DEFAULT 0,
+        score_percent DECIMAL(5,2) NULL,
+        answers_json LONGTEXT NULL,
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY idx_content_student (content_id, student_id),
+        KEY idx_student (student_id),
+        KEY idx_module (module_id)
+    ) {$charset_collate}";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta($sql);
+
+    return $table;
+}
+
+/**
+ * Ensure learner assignment submissions table exists.
+ */
+function nds_portal_ensure_assignment_submissions_table() {
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'nds_assignment_submissions';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        content_id BIGINT UNSIGNED NOT NULL,
+        student_id INT NOT NULL,
+        module_id INT NOT NULL,
+        course_id INT NOT NULL,
+        attempt_no INT NOT NULL DEFAULT 1,
+        submitted_text LONGTEXT NULL,
+        submission_link VARCHAR(500) NULL,
+        file_url VARCHAR(500) NULL,
+        file_name VARCHAR(255) NULL,
+        file_size BIGINT UNSIGNED NULL,
+        status VARCHAR(20) DEFAULT 'submitted',
+        feedback LONGTEXT NULL,
+        score DECIMAL(6,2) NULL,
+        submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        graded_at DATETIME NULL,
+        graded_by INT NULL,
+        PRIMARY KEY (id),
+        KEY idx_content_student (content_id, student_id),
+        KEY idx_student (student_id),
+        KEY idx_module (module_id),
+        KEY idx_status (status)
+    ) {$charset_collate}";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta($sql);
+
+    return $table;
+}
+
+add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+
+    $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+    if ($nonce === '' || !wp_verify_nonce($nonce, 'nds_portal_quiz_nonce')) {
+        wp_send_json_error('Invalid request token.', 403);
+    }
+
+    $student_id = (int) nds_portal_get_current_student_id();
+    if ($student_id <= 0) {
+        wp_send_json_error('Student profile not found for current user.');
+    }
+
+    $content_id = isset($_POST['content_id']) ? (int) $_POST['content_id'] : 0;
+    if ($content_id <= 0) {
+        wp_send_json_error('Invalid quiz content selected.');
+    }
+
+    global $wpdb;
+    $content = $wpdb->get_row($wpdb->prepare(
+                "SELECT id, module_id, course_id, title, quiz_data, min_grade_required
+         FROM {$wpdb->prefix}nds_lecturer_content
+         WHERE id = %d
+           AND content_type = 'quiz'
+           AND is_visible = 1
+           AND status = 'published'
+           AND (access_start IS NULL OR access_start <= NOW())
+           AND (access_end IS NULL OR access_end >= NOW())
+         LIMIT 1",
+        $content_id
+    ), ARRAY_A);
+
+    if (empty($content)) {
+        wp_send_json_error('Quiz is not available anymore.');
+    }
+
+    $module_id = (int) ($content['module_id'] ?? 0);
+    $course_id = (int) ($content['course_id'] ?? 0);
+    if ($module_id <= 0 || $course_id <= 0) {
+        wp_send_json_error('Quiz has invalid module/course mapping.');
+    }
+
+    $student_modules_table = nds_portal_ensure_student_modules_table();
+    $has_module_access = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT id FROM {$student_modules_table}
+         WHERE student_id = %d
+           AND module_id = %d
+           AND (status IN ('enrolled','active','registered') OR status IS NULL)
+         ORDER BY id DESC
+         LIMIT 1",
+        $student_id,
+        $module_id
+    ));
+
+    if ($has_module_access <= 0) {
+        $has_course_access = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}nds_student_enrollments
+             WHERE student_id = %d
+               AND course_id = %d
+               AND status IN ('enrolled','applied','waitlisted')
+             ORDER BY id DESC
+             LIMIT 1",
+            $student_id,
+            $course_id
+        ));
+
+        if ($has_course_access <= 0) {
+            wp_send_json_error('You do not have access to this quiz.');
+        }
+    }
+
+    $questions = json_decode((string) ($content['quiz_data'] ?? ''), true);
+    if (!is_array($questions) || empty($questions)) {
+        wp_send_json_error('Quiz questions could not be loaded.');
+    }
+
+    $answers_raw = isset($_POST['answers']) ? wp_unslash($_POST['answers']) : array();
+    if (!is_array($answers_raw)) {
+        $answers_raw = array();
+    }
+
+    $total_questions = count($questions);
+    $graded_questions = 0;
+    $correct_answers = 0;
+    $normalized_answers = array();
+
+    foreach ($questions as $idx => $question) {
+        $q_type = sanitize_key((string) ($question['type'] ?? 'multiple_choice'));
+        $answer_raw = isset($answers_raw[$idx]) ? (string) $answers_raw[$idx] : '';
+
+        if ($q_type === 'multiple_choice') {
+            $answer = strtoupper(substr(sanitize_text_field($answer_raw), 0, 1));
+            $expected = strtoupper(substr(sanitize_text_field((string) ($question['correct'] ?? '')), 0, 1));
+
+            $normalized_answers[$idx] = $answer;
+            $graded_questions++;
+            if ($answer !== '' && $expected !== '' && $answer === $expected) {
+                $correct_answers++;
+            }
+            continue;
+        }
+
+        $normalized_answers[$idx] = sanitize_textarea_field($answer_raw);
+    }
+
+    $score_percent = $graded_questions > 0
+        ? round(($correct_answers / $graded_questions) * 100, 2)
+        : null;
+    $pass_threshold = isset($content['min_grade_required']) && $content['min_grade_required'] !== null
+        ? max(0.0, min(100.0, (float) $content['min_grade_required']))
+        : 50.0;
+    $passed = $score_percent !== null ? ($score_percent >= $pass_threshold) : null;
+
+    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+    $attempt_no = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COALESCE(MAX(attempt_no), 0) + 1
+         FROM {$quiz_attempts_table}
+         WHERE content_id = %d AND student_id = %d",
+        $content_id,
+        $student_id
+    ));
+    if ($attempt_no <= 0) {
+        $attempt_no = 1;
+    }
+
+    $saved = $wpdb->insert(
+        $quiz_attempts_table,
+        array(
+            'content_id' => $content_id,
+            'student_id' => $student_id,
+            'module_id' => $module_id,
+            'course_id' => $course_id,
+            'attempt_no' => $attempt_no,
+            'total_questions' => $total_questions,
+            'graded_questions' => $graded_questions,
+            'correct_answers' => $correct_answers,
+            'score_percent' => $score_percent,
+            'answers_json' => wp_json_encode($normalized_answers),
+            'submitted_at' => current_time('mysql'),
+        ),
+        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s')
+    );
+
+    if ($saved === false) {
+        wp_send_json_error('Could not save your quiz attempt. Please try again.');
+    }
+
+    wp_send_json_success(array(
+        'message' => 'Quiz submitted successfully.',
+        'attempt_no' => $attempt_no,
+        'total_questions' => $total_questions,
+        'graded_questions' => $graded_questions,
+        'correct_answers' => $correct_answers,
+        'score_percent' => $score_percent,
+        'pass_threshold' => $pass_threshold,
+        'passed' => $passed,
+    ));
+});
+
+add_action('wp_ajax_nds_portal_submit_assignment', function () {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+
+    $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+    if ($nonce === '' || !wp_verify_nonce($nonce, 'nds_portal_assignment_nonce')) {
+        wp_send_json_error('Invalid request token.', 403);
+    }
+
+    $student_id = (int) nds_portal_get_current_student_id();
+    if ($student_id <= 0) {
+        wp_send_json_error('Student profile not found for current user.');
+    }
+
+    $content_id = isset($_POST['content_id']) ? (int) $_POST['content_id'] : 0;
+    if ($content_id <= 0) {
+        wp_send_json_error('Invalid assignment selected.');
+    }
+
+    global $wpdb;
+    $content = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, module_id, course_id, title, due_date
+         FROM {$wpdb->prefix}nds_lecturer_content
+         WHERE id = %d
+           AND content_type = 'assignment'
+           AND is_visible = 1
+           AND status = 'published'
+           AND (access_start IS NULL OR access_start <= NOW())
+           AND (access_end IS NULL OR access_end >= NOW())
+         LIMIT 1",
+        $content_id
+    ), ARRAY_A);
+
+    if (empty($content)) {
+        wp_send_json_error('Assignment is not available anymore.');
+    }
+
+    $module_id = (int) ($content['module_id'] ?? 0);
+    $course_id = (int) ($content['course_id'] ?? 0);
+    if ($course_id <= 0) {
+        wp_send_json_error('Assignment has invalid course mapping.');
+    }
+
+    $has_module_access = 0;
+    if ($module_id > 0) {
+        $student_modules_table = nds_portal_ensure_student_modules_table();
+        $has_module_access = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$student_modules_table}
+             WHERE student_id = %d
+               AND module_id = %d
+               AND (status IN ('enrolled','active','registered') OR status IS NULL)
+             ORDER BY id DESC
+             LIMIT 1",
+            $student_id,
+            $module_id
+        ));
+    }
+
+    if ($has_module_access <= 0) {
+        $has_course_access = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM {$wpdb->prefix}nds_student_enrollments
+             WHERE student_id = %d
+               AND course_id = %d
+               AND status IN ('enrolled','applied','waitlisted')
+             ORDER BY id DESC
+             LIMIT 1",
+            $student_id,
+            $course_id
+        ));
+
+        if ($has_course_access <= 0) {
+            wp_send_json_error('You do not have access to this assignment.');
+        }
+    }
+
+    $submitted_text = isset($_POST['submitted_text'])
+        ? sanitize_textarea_field(wp_unslash($_POST['submitted_text']))
+        : '';
+    $submission_link = isset($_POST['submission_link'])
+        ? esc_url_raw(wp_unslash($_POST['submission_link']))
+        : '';
+
+    $file_url = '';
+    $file_name = '';
+    $file_size = null;
+
+    if (!empty($_FILES['assignment_file']) && (int) ($_FILES['assignment_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_NO_FILE) {
+        if ((int) $_FILES['assignment_file']['error'] !== UPLOAD_ERR_OK) {
+            wp_send_json_error('Could not upload the file. Please try again.');
+        }
+
+        $max_file_size = 20 * 1024 * 1024;
+        $uploaded_size = (int) ($_FILES['assignment_file']['size'] ?? 0);
+        if ($uploaded_size > $max_file_size) {
+            wp_send_json_error('File exceeds 20MB limit.');
+        }
+
+        $file_ext = strtolower(pathinfo((string) ($_FILES['assignment_file']['name'] ?? ''), PATHINFO_EXTENSION));
+        $allowed_ext = array('pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'zip', 'jpg', 'jpeg', 'png');
+        if (!in_array($file_ext, $allowed_ext, true)) {
+            wp_send_json_error('Unsupported file type.');
+        }
+
+        require_once ABSPATH . 'wp-admin/includes/file.php';
+        $uploaded = wp_handle_upload($_FILES['assignment_file'], array('test_form' => false));
+        if (!empty($uploaded['error'])) {
+            wp_send_json_error('File upload failed: ' . $uploaded['error']);
+        }
+
+        $file_url = isset($uploaded['url']) ? esc_url_raw($uploaded['url']) : '';
+        $file_name = isset($_FILES['assignment_file']['name']) ? sanitize_file_name(wp_unslash($_FILES['assignment_file']['name'])) : '';
+        $file_size = $uploaded_size > 0 ? $uploaded_size : null;
+    }
+
+    if ($submitted_text === '' && $submission_link === '' && $file_url === '') {
+        wp_send_json_error('Add a message, link, or file before submitting.');
+    }
+
+    $assignment_submissions_table = nds_portal_ensure_assignment_submissions_table();
+    $existing_attempts = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*)
+         FROM {$assignment_submissions_table}
+         WHERE content_id = %d AND student_id = %d",
+        $content_id,
+        $student_id
+    ));
+
+    $attempt_limit = (int) apply_filters('nds_portal_assignment_attempt_limit', 3, $content, $student_id);
+    if ($attempt_limit > 0 && $existing_attempts >= $attempt_limit) {
+        wp_send_json_error('Attempt limit reached for this assignment.');
+    }
+
+    $is_late_submission = false;
+    if (!empty($content['due_date'])) {
+        $due_value = (string) $content['due_date'];
+        if (preg_match('/^\d{4}-\d{2}-\d{2}$/', $due_value)) {
+            $due_value .= ' 23:59:59';
+        }
+        $due_timestamp = strtotime($due_value);
+        if ($due_timestamp !== false) {
+            $is_late_submission = (time() > $due_timestamp);
+        }
+    }
+
+    $attempt_no = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COALESCE(MAX(attempt_no), 0) + 1
+         FROM {$assignment_submissions_table}
+         WHERE content_id = %d AND student_id = %d",
+        $content_id,
+        $student_id
+    ));
+    if ($attempt_no <= 0) {
+        $attempt_no = 1;
+    }
+
+    $saved = $wpdb->insert(
+        $assignment_submissions_table,
+        array(
+            'content_id' => $content_id,
+            'student_id' => $student_id,
+            'module_id' => $module_id,
+            'course_id' => $course_id,
+            'attempt_no' => $attempt_no,
+            'submitted_text' => $submitted_text !== '' ? $submitted_text : null,
+            'submission_link' => $submission_link !== '' ? $submission_link : null,
+            'file_url' => $file_url !== '' ? $file_url : null,
+            'file_name' => $file_name !== '' ? $file_name : null,
+            'file_size' => $file_size,
+            'status' => $is_late_submission ? 'late' : 'submitted',
+            'submitted_at' => current_time('mysql'),
+        ),
+        array('%d', '%d', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%s', '%s')
+    );
+
+    if ($saved === false) {
+        wp_send_json_error('Could not save your assignment submission. Please try again.');
+    }
+
+    wp_send_json_success(array(
+        'message' => $is_late_submission ? 'Assignment submitted (late).' : 'Assignment submitted successfully.',
+        'attempt_no' => $attempt_no,
+        'status' => $is_late_submission ? 'late' : 'submitted',
+        'is_late' => $is_late_submission,
+        'attempt_limit' => $attempt_limit,
+        'submitted_at' => current_time('mysql'),
+        'submitted_text' => $submitted_text,
+        'submission_link' => $submission_link,
+        'file_url' => $file_url,
+        'file_name' => $file_name,
+    ));
+});
 
 add_action('wp_ajax_nds_portal_registration_action', function () {
     if (!is_user_logged_in()) {
@@ -1874,6 +2309,31 @@ add_action('template_redirect', function () {
     include plugin_dir_path(__FILE__) . 'templates/learner-portal.php';
     exit;
 });
+
+// Allow front-end staff portal forms to reuse existing admin_post handlers without going through /wp-admin/admin-post.php.
+add_action('template_redirect', function () {
+    if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
+        return;
+    }
+
+    $is_staff_portal = (int) get_query_var('nds_staff_portal');
+    if ($is_staff_portal !== 1) {
+        return;
+    }
+
+    $action = isset($_POST['action']) ? sanitize_key(wp_unslash($_POST['action'])) : '';
+    if ($action === '' || strpos($action, 'nds_staff_') !== 0) {
+        return;
+    }
+
+    $hook_name = 'admin_post_' . $action;
+    if (!has_action($hook_name)) {
+        return;
+    }
+
+    do_action($hook_name);
+    exit;
+}, 1);
 
 // Staff Portal Route Handler
 add_action('template_redirect', function () {
