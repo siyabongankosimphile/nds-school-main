@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 require_once plugin_dir_path(__FILE__) . 'setup-ups.php';
 require_once plugin_dir_path(__FILE__) . 'students-functions.php';
 require_once plugin_dir_path(__FILE__) . 'common.php';
+require_once plugin_dir_path(__FILE__) . 'students-mosaic-grid.php';
 require_once plugin_dir_path(__FILE__) . 'staff-functions.php';
 require_once plugin_dir_path(__FILE__) . 'path-functions.php';
 require_once plugin_dir_path(__FILE__) . 'education-management.php';
@@ -1475,12 +1476,7 @@ function nds_all_students_page() {
     nds_learner_management_page();
 }
 
-// Students Mosaic Grid Page
-function nds_students_mosaic_grid_page() {
-    // Load the students mosaic grid page
-    require_once plugin_dir_path(__FILE__) . 'students-mosaic-grid.php';
-    nds_students_mosaic_grid_page();
-}
+// Students Mosaic Grid Page - function provided by students-mosaic-grid.php (included at top of file)
 
 // Add Student Page
 function nds_add_student_page() {

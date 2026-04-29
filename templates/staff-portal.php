@@ -41,6 +41,12 @@ if (!defined('ABSPATH')) {
 
 global $wpdb;
 
+$course_lecturer_columns = $wpdb->get_col("SHOW COLUMNS FROM {$wpdb->prefix}nds_course_lecturers", 0);
+$assigned_col = in_array('assigned_at', $course_lecturer_columns, true)
+    ? 'assigned_at'
+    : (in_array('assigned_date', $course_lecturer_columns, true) ? 'assigned_date' : null);
+$assigned_expr = $assigned_col ? "cl.{$assigned_col} AS assigned_at" : 'NULL AS assigned_at';
+
 // Resolve current staff from logged-in user
 $staff_id = (int) nds_portal_get_current_staff_id();
 if ($staff_id <= 0) {
@@ -61,7 +67,7 @@ $full_name = trim(($staff_data['first_name'] ?? '') . ' ' . ($staff_data['last_n
 $courses_taught = $wpdb->get_results(
     $wpdb->prepare(
         "
-        SELECT c.*, cl.assigned_date
+        SELECT c.*, {$assigned_expr}
         FROM {$wpdb->prefix}nds_course_lecturers cl
         INNER JOIN {$wpdb->prefix}nds_courses c ON cl.course_id = c.id
         WHERE cl.lecturer_id = %d

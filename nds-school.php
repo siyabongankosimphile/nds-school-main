@@ -58,23 +58,8 @@ add_filter('wp_authenticate_user', function ($user, $password) {
     if (is_wp_error($user)) {
         return $user;
     }
-
-    // Never block privileged admin logins based on legacy password strength.
-    if ($user instanceof WP_User && user_can($user, 'manage_options')) {
-        return $user;
-    }
-
-    if (!is_string($password) || $password === '') {
-        return $user;
-    }
-
-    if (!nds_is_strong_password($password)) {
-        return new WP_Error(
-            'nds_weak_password_login',
-            __('Your password does not meet the current security requirements. Please reset your password and use a stronger one.', 'nds-school')
-        );
-    }
-
+    // Do not hard-block login for legacy/seeded accounts.
+    // Strength is enforced on reset/profile updates instead.
     return $user;
 }, 10, 2);
 
@@ -191,16 +176,17 @@ add_filter('show_admin_bar', function ($show) {
  * instead of being sent to the default wp-login.php screen.
  */
 add_filter('logout_redirect', function ($redirect_to, $requested_redirect_to, $user) {
+    if (!empty($requested_redirect_to)) {
+        return $requested_redirect_to;
+    }
+
     // Normalize $user to a WP_User instance when possible
     if ($user && !($user instanceof WP_User)) {
         $user = get_user_by('id', (int) $user);
     }
 
-    if ($user instanceof WP_User && in_array('subscriber', (array) $user->roles, true)) {
-        return home_url('/');
-    }
-
-    return $redirect_to;
+    // Keep post-logout landing on a stable page (root homepage may be blank in some theme setups).
+    return wp_login_url();
 }, 10, 3);
 
 /**
@@ -211,9 +197,14 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
         return $redirect_to;
     }
 
-    // Keep admins on default/admin flow.
+    // Respect explicit target when present.
+    if (!empty($requested_redirect_to)) {
+        return $requested_redirect_to;
+    }
+
+    // Admins should land on the plugin dashboard (stable and always available).
     if (user_can($user, 'manage_options')) {
-        return $redirect_to;
+        return admin_url('admin.php?page=nds-academy');
     }
 
     global $wpdb;
@@ -230,11 +221,17 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
         ), ARRAY_A);
     }
 
-    if (!empty($staff_row) && isset($staff_row['role']) && strtolower(trim((string) $staff_row['role'])) === 'lecturer') {
+    // Any mapped staff account should land in staff portal.
+    if (!empty($staff_row)) {
         return home_url('/staff-portal/?tab=overview');
     }
 
-    return $redirect_to;
+    if (in_array('subscriber', (array) $user->roles, true)) {
+        return home_url('/portal/');
+    }
+
+    // Final fallback for non-staff, non-subscriber users.
+    return admin_url();
 }, 10, 3);
 
 /**
@@ -373,12 +370,7 @@ add_action('init', function () {
     global $wpdb;
     $needs_migration = false;
 
-    // Check Action Scheduler tables (often required by other plugins like Fluent Forms)
-    $as_actions = $wpdb->prefix . 'actionscheduler_actions';
-    $table_exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $as_actions));
-    if (empty($table_exists)) {
-        $needs_migration = true;
-    }
+    // Do not force NDS schema migration from third-party plugin tables.
 
     // Check critical students table columns
     $students_table = $wpdb->prefix . 'nds_students';
@@ -455,9 +447,6 @@ include_once plugin_dir_path(__FILE__) . 'includes/application-functions.php';
 include_once plugin_dir_path(__FILE__) . 'includes/staff-roles.php';
 include_once plugin_dir_path(__FILE__) . 'public/class-shortcodes.php';
 
-// Initialize shortcodes
-new NDS_Shortcodes();
-
 
 // Activation Hook
 function nds_school_activate() {
@@ -493,11 +482,14 @@ function nds_run_migrations_action() {
         wp_die('Migration can only be run once per hour. Please wait.');
     }
     
+    require_once plugin_dir_path(__FILE__) . 'includes/database.php';
+    nds_school_create_tables();
+
     require_once plugin_dir_path(__FILE__) . 'includes/database-migration.php';
     $migration = new NDS_Database_Migration();
     $migration->force_migration();
     
-    wp_redirect(admin_url('admin.php?page=nds-academy&migration=success'));
+    wp_redirect(admin_url('admin.php?page=nds-learner-management&success=migrations_ran'));
     exit;
 }
 
@@ -543,11 +535,14 @@ function nds_log_error($message, $context = array(), $level = 'error') {
 
     // Also log to database for better tracking (optional - comment out if not needed)
     global $wpdb;
+    $actor_id = get_current_user_id();
+    $actor_id = $actor_id > 0 ? $actor_id : null;
+
     $wpdb->insert(
         $wpdb->prefix . 'nds_student_activity_log',
         array(
-            'student_id' => 0, // Use 0 for system events
-            'actor_id' => get_current_user_id(),
+            'student_id' => null,
+            'actor_id' => $actor_id,
             'action' => 'system_error',
             'action_type' => 'create',
             'old_values' => null,
@@ -558,19 +553,6 @@ function nds_log_error($message, $context = array(), $level = 'error') {
         array('%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s')
     );
 }
-
-function nds_school_run_migrations_action() {
-    if (!current_user_can('manage_options')) {
-        wp_die('Unauthorized');
-    }
-
-    require_once plugin_dir_path(__FILE__) . 'includes/database.php';
-    nds_school_create_tables();
-
-    wp_redirect(admin_url('admin.php?page=nds-learner-management&success=migrations_ran'));
-    exit;
-}
-add_action('admin_post_nds_run_migrations', 'nds_school_run_migrations_action');
 
 // Function to clean up expired rate limit transients (run daily)
 function nds_cleanup_rate_limits() {

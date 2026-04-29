@@ -7,6 +7,12 @@ global $wpdb;
 
 $staff_id = isset($staff_id) ? (int) $staff_id : (int) nds_portal_get_current_staff_id();
 $content_table = $wpdb->prefix . 'nds_lecturer_content';
+$modules_table = $wpdb->prefix . 'nds_modules';
+$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}", 0);
+$module_code_col = in_array('module_code', $module_columns, true)
+    ? 'module_code'
+    : (in_array('code', $module_columns, true) ? 'code' : null);
+$module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
 
 $notice = isset($_GET['content_notice']) ? sanitize_text_field(wp_unslash($_GET['content_notice'])) : '';
 $error = isset($_GET['content_error']) ? sanitize_text_field(wp_unslash($_GET['content_error'])) : '';
@@ -17,7 +23,7 @@ if (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results(
         $wpdb->prepare(
-            "SELECT m.id, m.name, m.code AS module_code, c.id AS course_id, c.name AS course_name
+            "SELECT m.id, m.name, {$module_code_expr}, c.id AS course_id, c.name AS course_name
              FROM {$wpdb->prefix}nds_modules m
              INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
              WHERE m.course_id IN ($placeholders)
@@ -42,7 +48,7 @@ $courses_for_form = $wpdb->get_results(
 
 $items = $wpdb->get_results(
     $wpdb->prepare(
-        "SELECT lc.*, c.name AS course_name, m.name AS module_name, m.code AS module_code
+        "SELECT lc.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
          FROM {$content_table} lc
          LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = lc.course_id
          LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = lc.module_id

@@ -654,7 +654,7 @@ function nds_school_create_tables()
     $sql_application_reviews = "CREATE TABLE IF NOT EXISTS $t_application_reviews (
         id INT AUTO_INCREMENT PRIMARY KEY,
         application_id INT NOT NULL,
-        reviewer_id INT NOT NULL,
+        reviewer_id BIGINT(20) UNSIGNED NOT NULL,
         stage ENUM('eligibility','academic','finance','final') DEFAULT 'eligibility',
         score DECIMAL(5,2) NULL,
         recommendation ENUM('proceed','waitlist','reject','conditional') NULL,
@@ -664,6 +664,14 @@ function nds_school_create_tables()
         FOREIGN KEY (reviewer_id) REFERENCES {$wpdb->prefix}users(ID) ON DELETE CASCADE
     ) $charset_collate;";
     dbDelta($sql_application_reviews);
+
+    // Backward compatibility: align reviewer_id type with wp_users.ID.
+    $reviewer_column = $wpdb->get_row("SHOW COLUMNS FROM $t_application_reviews LIKE 'reviewer_id'", ARRAY_A);
+    if (!empty($reviewer_column) && isset($reviewer_column['Type']) && stripos((string) $reviewer_column['Type'], 'bigint') === false) {
+        $wpdb->query("ALTER TABLE $t_application_reviews DROP FOREIGN KEY wp_nds_application_reviews_ibfk_2");
+        $wpdb->query("ALTER TABLE $t_application_reviews MODIFY COLUMN reviewer_id BIGINT(20) UNSIGNED NOT NULL");
+        $wpdb->query("ALTER TABLE $t_application_reviews ADD CONSTRAINT wp_nds_application_reviews_ibfk_2 FOREIGN KEY (reviewer_id) REFERENCES {$wpdb->prefix}users(ID) ON DELETE CASCADE");
+    }
 
     $sql_application_payments = "CREATE TABLE IF NOT EXISTS $t_application_payments (
         id INT AUTO_INCREMENT PRIMARY KEY,
@@ -714,6 +722,7 @@ function nds_school_create_tables()
         address TEXT,
         dob DATE,
         gender ENUM('Male','Female','Other'),
+        status ENUM('active','inactive') DEFAULT 'active',
         faculty_id INT NULL,
         program_id INT NULL,
         course_id INT NULL,
@@ -723,12 +732,14 @@ function nds_school_create_tables()
         INDEX idx_email (email),
         INDEX idx_faculty (faculty_id),
         INDEX idx_program (program_id),
-        INDEX idx_course (course_id)
+        INDEX idx_course (course_id),
+        INDEX idx_status (status)
     ) $charset_collate;";
     dbDelta($sql_staff);
 
     // Backward compatibility for existing installations.
     $staff_extra_columns = [
+        'status' => "ENUM('active','inactive') DEFAULT 'active'",
         'faculty_id' => 'INT NULL',
         'program_id' => 'INT NULL',
         'course_id' => 'INT NULL',
@@ -746,13 +757,24 @@ function nds_school_create_tables()
         id INT AUTO_INCREMENT PRIMARY KEY,
         course_id INT NOT NULL,
         lecturer_id INT NOT NULL,
-        assigned_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (course_id) REFERENCES $t_courses(id) ON DELETE CASCADE,
         FOREIGN KEY (lecturer_id) REFERENCES $t_staff(id) ON DELETE CASCADE,
         UNIQUE KEY unique_course_lecturer (course_id, lecturer_id),
         INDEX idx_lecturer (lecturer_id)
     ) $charset_collate;";
     dbDelta($sql_course_lecturers);
+
+    // Backward compatibility for historical column name.
+    $assigned_at_exists = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM $t_course_lecturers LIKE %s", 'assigned_at'));
+    if (empty($assigned_at_exists)) {
+        $assigned_date_exists = $wpdb->get_var($wpdb->prepare("SHOW COLUMNS FROM $t_course_lecturers LIKE %s", 'assigned_date'));
+        if (!empty($assigned_date_exists)) {
+            $wpdb->query("ALTER TABLE $t_course_lecturers CHANGE assigned_date assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+        } else {
+            $wpdb->query("ALTER TABLE $t_course_lecturers ADD COLUMN assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP");
+        }
+    }
 
     // COURSE SCHEDULES (Timetable)
     // -------------------------------------------------------------------------
@@ -953,7 +975,7 @@ function nds_school_create_tables()
     $t_activity_log = $wpdb->prefix . 'nds_student_activity_log';
     $sql_activity_log = "CREATE TABLE IF NOT EXISTS $t_activity_log (
         id INT AUTO_INCREMENT PRIMARY KEY,
-        student_id INT NOT NULL,
+        student_id INT NULL,
         actor_id BIGINT(20) UNSIGNED NULL,
         action VARCHAR(255) NOT NULL,
         action_type VARCHAR(50),
@@ -962,12 +984,32 @@ function nds_school_create_tables()
         ip_address VARCHAR(45),
         user_agent TEXT,
         timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (student_id) REFERENCES $t_students(id) ON DELETE CASCADE,
+        FOREIGN KEY (student_id) REFERENCES $t_students(id) ON DELETE SET NULL,
         FOREIGN KEY (actor_id) REFERENCES {$wpdb->prefix}users(ID) ON DELETE SET NULL,
         INDEX idx_student (student_id),
         INDEX idx_timestamp (timestamp)
     ) $charset_collate;";
     dbDelta($sql_activity_log);
+
+    // STAFF ACTIVITY LOG
+    $t_staff_activity_log = $wpdb->prefix . 'nds_staff_activity_log';
+    $sql_staff_activity_log = "CREATE TABLE IF NOT EXISTS $t_staff_activity_log (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        staff_id INT NOT NULL,
+        actor_id BIGINT(20) UNSIGNED NULL,
+        action VARCHAR(255) NOT NULL,
+        action_type VARCHAR(50),
+        old_values LONGTEXT NULL,
+        new_values LONGTEXT NULL,
+        ip_address VARCHAR(45),
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (staff_id) REFERENCES $t_staff(id) ON DELETE CASCADE,
+        FOREIGN KEY (actor_id) REFERENCES {$wpdb->prefix}users(ID) ON DELETE SET NULL,
+        INDEX idx_staff (staff_id),
+        INDEX idx_created_at (created_at)
+    ) $charset_collate;";
+    dbDelta($sql_staff_activity_log);
 
     // STUDENT NOTIFICATIONS
     $t_notifications = $wpdb->prefix . 'nds_notifications';

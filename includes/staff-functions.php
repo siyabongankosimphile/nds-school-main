@@ -719,9 +719,18 @@ function nds_unassign_lecturer_from_course() {
 function nds_log_staff_action($staff_id, $actor_id, $action, $action_type, $old_values = null, $new_values = null) {
     global $wpdb;
     $table = $wpdb->prefix . 'nds_staff_activity_log';
+
+    $table_exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table));
+    if (empty($table_exists)) {
+        return;
+    }
+
+    $actor_id = intval($actor_id);
+    $actor_id = $actor_id > 0 ? $actor_id : null;
+
     $wpdb->insert($table, array(
         'staff_id' => intval($staff_id),
-        'actor_id' => intval($actor_id),
+        'actor_id' => $actor_id,
         'action' => sanitize_text_field($action),
         'action_type' => sanitize_text_field($action_type),
         'old_values' => $old_values,

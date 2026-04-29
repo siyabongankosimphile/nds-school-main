@@ -365,6 +365,3 @@ class NDS_Hero_Carousel {
         );
     }
 }
-
-// Initialize the carousel
-new NDS_Hero_Carousel();

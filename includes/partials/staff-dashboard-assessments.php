@@ -5,6 +5,13 @@ if (!defined('ABSPATH')) {
 
 global $wpdb;
 
+$modules_table = $wpdb->prefix . 'nds_modules';
+$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}", 0);
+$module_code_col = in_array('module_code', $module_columns, true)
+    ? 'module_code'
+    : (in_array('code', $module_columns, true) ? 'code' : null);
+$module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
+
 $course_ids = isset($course_ids) && is_array($course_ids) ? array_values(array_map('intval', $course_ids)) : array();
 $selected_assessment_id = isset($_GET['assessment_id']) ? (int) $_GET['assessment_id'] : 0;
 $selected_content_course_filter = isset($_GET['content_course_id']) ? (int) $_GET['content_course_id'] : 0;
@@ -30,7 +37,7 @@ $modules_for_form = array();
 if (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results($wpdb->prepare(
-        "SELECT m.id, m.name, m.code AS module_code, m.course_id, c.name AS course_name
+        "SELECT m.id, m.name, {$module_code_expr}, m.course_id, c.name AS course_name
          FROM {$wpdb->prefix}nds_modules m
          INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
          WHERE m.course_id IN ($placeholders)
@@ -43,7 +50,7 @@ $assessments = array();
 if (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $assessments = $wpdb->get_results($wpdb->prepare(
-        "SELECT a.*, c.name AS course_name, m.name AS module_name, m.code AS module_code
+        "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
          FROM {$wpdb->prefix}nds_assessments a
          INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
          LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id

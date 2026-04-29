@@ -5,6 +5,14 @@ if (!defined('ABSPATH')) {
 // This file expects: $staff, $staff_id, $courses_taught, $active_year_id, $active_semester_id
 global $wpdb;
 
+$modules_table = $wpdb->prefix . 'nds_modules';
+$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}", 0);
+$module_code_col = in_array('module_code', $module_columns, true)
+    ? 'module_code'
+    : (in_array('code', $module_columns, true) ? 'code' : null);
+$module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
+$module_status_expr = in_array('status', $module_columns, true) ? "m.status AS status" : "'active' AS status";
+
 // Get selected course or default to first course
 $selected_course_id = isset($_GET['course_id']) ? (int) $_GET['course_id'] : 0;
 if ($selected_course_id <= 0 && !empty($courses_taught)) {
@@ -17,7 +25,7 @@ $modules_by_course = array();
 if (!empty($lecturer_course_ids)) {
     $ids_placeholder = implode(',', array_map('intval', $lecturer_course_ids));
     $all_modules = $wpdb->get_results(
-        "SELECT m.id, m.name, m.code, m.type, m.status, m.course_id
+        "SELECT m.id, m.name, {$module_code_expr}, m.type, {$module_status_expr}, m.course_id
          FROM {$wpdb->prefix}nds_modules m
          WHERE m.course_id IN ($ids_placeholder)
          ORDER BY m.course_id ASC, m.id ASC",
@@ -132,7 +140,7 @@ if ($selected_course_id > 0) {
                                     <tbody class="bg-white divide-y divide-gray-100">
                                         <?php foreach ($course_modules as $mod): ?>
                                             <tr class="hover:bg-gray-50">
-                                                <td class="px-4 py-2 font-mono text-blue-700"><?php echo esc_html($mod['code'] ?? '—'); ?></td>
+                                                <td class="px-4 py-2 font-mono text-blue-700"><?php echo esc_html($mod['module_code'] ?? '—'); ?></td>
                                                 <td class="px-4 py-2 text-gray-900"><?php echo esc_html($mod['name']); ?></td>
                                                 <td class="px-4 py-2 capitalize text-gray-600"><?php echo esc_html($mod['type'] ?? '—'); ?></td>
                                                 <td class="px-4 py-2">

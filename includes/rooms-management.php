@@ -7,77 +7,76 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-// Handle form submissions
-if (isset($_POST['nds_room_action'])) {
+// Handle form submissions via admin_init (fires before any output, ensuring wp_redirect works)
+add_action('admin_init', 'nds_handle_room_form');
+function nds_handle_room_form() {
+    if (!isset($_POST['nds_room_action'])) {
+        return;
+    }
     if (!current_user_can('manage_options')) {
         wp_die('Unauthorized');
     }
-    
+
     check_admin_referer('nds_room_action');
-    
+
     global $wpdb;
     $rooms_table = $wpdb->prefix . 'nds_rooms';
-    
+
     $action = sanitize_text_field($_POST['nds_room_action']);
-    
+
     if ($action === 'add' || $action === 'edit') {
         $room_id = isset($_POST['room_id']) ? intval($_POST['room_id']) : 0;
-        $code = sanitize_text_field($_POST['code']);
-        $name = sanitize_text_field($_POST['name']);
-        $type = sanitize_text_field($_POST['type']);
+        $code     = sanitize_text_field($_POST['code']);
+        $name     = sanitize_text_field($_POST['name']);
+        $type     = sanitize_text_field($_POST['type']);
         $capacity = isset($_POST['capacity']) ? intval($_POST['capacity']) : 0;
-        $location = sanitize_text_field($_POST['location'] ?? '');
+        $location  = sanitize_text_field($_POST['location'] ?? '');
         $equipment = sanitize_textarea_field($_POST['equipment'] ?? '');
         $amenities = sanitize_textarea_field($_POST['amenities'] ?? '');
         $is_active = isset($_POST['is_active']) ? 1 : 0;
-        
+
         $data = [
-            'code' => $code,
-            'name' => $name,
-            'type' => $type,
-            'capacity' => $capacity,
-            'location' => $location,
-            'equipment' => $equipment,
-            'amenities' => $amenities,
-            'is_active' => $is_active,
-            'updated_at' => current_time('mysql')
+            'code'       => $code,
+            'name'       => $name,
+            'type'       => $type,
+            'capacity'   => $capacity,
+            'location'   => $location,
+            'equipment'  => $equipment,
+            'amenities'  => $amenities,
+            'is_active'  => $is_active,
+            'updated_at' => current_time('mysql'),
         ];
-        
         $format = ['%s', '%s', '%s', '%d', '%s', '%s', '%s', '%d', '%s'];
-        
+
         if ($action === 'add') {
             $data['created_at'] = current_time('mysql');
             $format[] = '%s';
-            
             $result = $wpdb->insert($rooms_table, $data, $format);
             if ($result) {
                 wp_redirect(admin_url('admin.php?page=nds-rooms&success=added'));
-                exit;
             } else {
                 wp_redirect(admin_url('admin.php?page=nds-rooms&error=' . urlencode($wpdb->last_error)));
-                exit;
             }
         } else {
             $result = $wpdb->update($rooms_table, $data, ['id' => $room_id], $format, ['%d']);
             if ($result !== false) {
                 wp_redirect(admin_url('admin.php?page=nds-rooms&success=updated'));
-                exit;
             } else {
                 wp_redirect(admin_url('admin.php?page=nds-rooms&error=' . urlencode($wpdb->last_error)));
-                exit;
             }
         }
+        exit;
+
     } elseif ($action === 'delete') {
         $room_id = isset($_POST['room_id']) ? intval($_POST['room_id']) : 0;
         if ($room_id) {
             $result = $wpdb->delete($rooms_table, ['id' => $room_id], ['%d']);
             if ($result) {
                 wp_redirect(admin_url('admin.php?page=nds-rooms&success=deleted'));
-                exit;
             } else {
                 wp_redirect(admin_url('admin.php?page=nds-rooms&error=' . urlencode($wpdb->last_error)));
-                exit;
             }
+            exit;
         }
     }
 }
@@ -186,6 +185,107 @@ function nds_rooms_page() {
 
         <!-- Main content -->
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
+
+        <?php if (isset($_GET['add']) || $edit_id): ?>
+            <!-- Add / Edit Room Form -->
+            <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                <div class="px-6 py-5 border-b border-gray-100 bg-gray-50/50 flex items-center gap-3">
+                    <div class="w-9 h-9 bg-blue-100 rounded-lg flex items-center justify-center">
+                        <i class="fas fa-<?php echo $edit_id ? 'edit' : 'plus'; ?> text-blue-600 text-sm"></i>
+                    </div>
+                    <h2 class="text-lg font-semibold text-gray-900">
+                        <?php echo $edit_id ? 'Edit Room / Venue' : 'Add New Room / Venue'; ?>
+                    </h2>
+                </div>
+                <form method="post" action="<?php echo esc_url(admin_url('admin.php?page=nds-rooms')); ?>" class="px-6 py-6">
+                    <?php wp_nonce_field('nds_room_action'); ?>
+                    <input type="hidden" name="nds_room_action" value="<?php echo $edit_id ? 'edit' : 'add'; ?>">
+                    <?php if ($edit_id): ?>
+                        <input type="hidden" name="room_id" value="<?php echo intval($edit_id); ?>">
+                    <?php endif; ?>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                        <!-- Code -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Room Code <span class="text-red-500">*</span></label>
+                            <input type="text" name="code" value="<?php echo esc_attr($edit_room['code'] ?? ''); ?>" required
+                                   class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm"
+                                   placeholder="e.g. RM101">
+                        </div>
+                        <!-- Name -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Room Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="name" value="<?php echo esc_attr($edit_room['name'] ?? ''); ?>" required
+                                   class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm"
+                                   placeholder="e.g. Main Lecture Hall">
+                        </div>
+                        <!-- Type -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Type <span class="text-red-500">*</span></label>
+                            <select name="type" required class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm bg-white">
+                                <option value="">— Select Type —</option>
+                                <option value="hall" <?php selected(($edit_room['type'] ?? ''), 'hall'); ?>>Hall</option>
+                                <option value="classroom" <?php selected(($edit_room['type'] ?? ''), 'classroom'); ?>>Classroom</option>
+                                <option value="kitchen" <?php selected(($edit_room['type'] ?? ''), 'kitchen'); ?>>Kitchen</option>
+                                <option value="lab" <?php selected(($edit_room['type'] ?? ''), 'lab'); ?>>Laboratory</option>
+                                <option value="workshop" <?php selected(($edit_room['type'] ?? ''), 'workshop'); ?>>Workshop</option>
+                                <option value="other" <?php selected(($edit_room['type'] ?? ''), 'other'); ?>>Other</option>
+                            </select>
+                        </div>
+                        <!-- Capacity -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Capacity</label>
+                            <input type="number" name="capacity" value="<?php echo intval($edit_room['capacity'] ?? 0); ?>" min="0"
+                                   class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm"
+                                   placeholder="0">
+                        </div>
+                        <!-- Location -->
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Location / Building</label>
+                            <input type="text" name="location" value="<?php echo esc_attr($edit_room['location'] ?? ''); ?>"
+                                   class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm"
+                                   placeholder="e.g. Block A, Ground Floor">
+                        </div>
+                        <!-- Equipment -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Equipment</label>
+                            <textarea name="equipment" rows="3"
+                                      class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm"
+                                      placeholder="e.g. Projector, Whiteboard, PA System"><?php echo esc_textarea($edit_room['equipment'] ?? ''); ?></textarea>
+                        </div>
+                        <!-- Amenities -->
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1.5">Amenities</label>
+                            <textarea name="amenities" rows="3"
+                                      class="block w-full px-3 py-2.5 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm shadow-sm"
+                                      placeholder="e.g. Air conditioning, WiFi, Accessible"><?php echo esc_textarea($edit_room['amenities'] ?? ''); ?></textarea>
+                        </div>
+                        <!-- Active Status -->
+                        <div class="md:col-span-2">
+                            <label class="flex items-center gap-3 cursor-pointer">
+                                <input type="checkbox" name="is_active" value="1" <?php checked(intval($edit_room['is_active'] ?? 1), 1); ?>
+                                       class="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500">
+                                <span class="text-sm font-medium text-gray-700">Active (available for scheduling)</span>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="flex items-center gap-3 pt-6 mt-6 border-t border-gray-100">
+                        <button type="submit"
+                                class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-6 rounded-lg text-sm transition-colors shadow-sm">
+                            <?php echo $edit_id ? 'Update Room' : 'Add Room'; ?>
+                        </button>
+                        <a href="<?php echo esc_url(admin_url('admin.php?page=nds-rooms')); ?>"
+                           class="bg-white hover:bg-gray-50 text-gray-700 font-semibold py-2.5 px-6 rounded-lg text-sm border border-gray-300 transition-colors">
+                            Cancel
+                        </a>
+                    </div>
+                </form>
+            </div>
+        </div><!-- /max-w container -->
+    </div><!-- /nds-tailwind-wrapper -->
+    <?php return; endif; ?>
+
             <!-- KPI cards -->
             <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
                 <!-- Total Venues -->
