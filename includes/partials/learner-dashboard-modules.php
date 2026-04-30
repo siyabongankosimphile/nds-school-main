@@ -18,9 +18,19 @@ $modules_table = $wpdb->prefix . 'nds_modules';
 $student_modules_table = $wpdb->prefix . 'nds_student_modules';
 $courses_table = $wpdb->prefix . 'nds_courses';
 
+$module_columns = $wpdb->get_col("SHOW COLUMNS FROM {$modules_table}", 0);
+$module_code_col = in_array('module_code', $module_columns, true)
+    ? 'module_code'
+    : (in_array('code', $module_columns, true) ? 'code' : null);
+$module_hours_col = in_array('hours', $module_columns, true)
+    ? 'hours'
+    : (in_array('duration_hours', $module_columns, true) ? 'duration_hours' : null);
+$module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
+$module_hours_expr = $module_hours_col ? "m.{$module_hours_col} AS module_hours" : '0 AS module_hours';
+
 // Get currently enrolled modules
 $query = "
-    SELECT sm.*, m.name, m.code, m.type, m.duration_hours, m.description, c.name as course_name 
+    SELECT sm.*, m.name, {$module_code_expr}, m.type, {$module_hours_expr}, m.description, c.name as course_name 
     FROM {$student_modules_table} sm
     JOIN {$modules_table} m ON sm.module_id = m.id
     JOIN {$courses_table} c ON m.course_id = c.id
@@ -97,9 +107,9 @@ $enrolled_modules = $wpdb->get_results($wpdb->prepare(
                                         <div class="flex-1">
                                             <div class="flex items-center gap-2 mb-1">
                                                 <h4 class="font-semibold text-gray-900"><?php echo esc_html($module['name']); ?></h4>
-                                                <?php if (!empty($module['code'])): ?>
+                                                <?php if (!empty($module['module_code'])): ?>
                                                     <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800">
-                                                        <?php echo esc_html($module['code']); ?>
+                                                        <?php echo esc_html($module['module_code']); ?>
                                                     </span>
                                                 <?php endif; ?>
                                             </div>
@@ -114,10 +124,10 @@ $enrolled_modules = $wpdb->get_results($wpdb->prepare(
                                                         <?php echo esc_html($module['type']); ?>
                                                     </span>
                                                 <?php endif; ?>
-                                                <?php if (!empty($module['duration_hours'])): ?>
+                                                <?php if (!empty($module['module_hours'])): ?>
                                                     <span class="flex items-center">
                                                         <i class="fas fa-clock mr-1 text-gray-400"></i>
-                                                        <?php echo intval($module['duration_hours']); ?> Hours
+                                                        <?php echo intval($module['module_hours']); ?> Hours
                                                     </span>
                                                 <?php endif; ?>
                                                 <span class="flex items-center capitalize <?php echo $module['status'] === 'enrolled' ? 'text-green-600 font-medium' : ''; ?>">

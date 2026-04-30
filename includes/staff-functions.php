@@ -54,6 +54,7 @@ function nds_parse_staff_lecturer_assignments($request_data) {
     $faculty_ids = isset($request_data['lecturer_faculty_id']) ? (array) $request_data['lecturer_faculty_id'] : array();
     $program_ids = isset($request_data['lecturer_program_id']) ? (array) $request_data['lecturer_program_id'] : array();
     $course_ids = isset($request_data['lecturer_course_id']) ? (array) $request_data['lecturer_course_id'] : array();
+        $module_ids = isset($request_data['lecturer_module_id']) ? (array) $request_data['lecturer_module_id'] : array();
 
     if (empty($faculty_ids) && empty($program_ids) && empty($course_ids)) {
         $faculty_id = isset($request_data['faculty_id']) ? intval($request_data['faculty_id']) : 0;
@@ -87,6 +88,7 @@ function nds_parse_staff_lecturer_assignments($request_data) {
             'faculty_id' => $faculty_id,
             'program_id' => $program_id,
             'course_id' => $course_id,
+                'module_id' => isset($module_ids[$index]) ? intval($module_ids[$index]) : 0,
         );
     }
 
@@ -112,6 +114,20 @@ function nds_sync_staff_lecturer_assignments($staff_id, array $lecturer_assignme
             $staff_id
         ));
     }
+
+        // Sync module assignments
+        $module_link_table = $wpdb->prefix . 'nds_module_lecturers';
+        $wpdb->delete($module_link_table, array('lecturer_id' => $staff_id), array('%d'));
+
+        foreach ($lecturer_assignments as $assignment) {
+            if (!empty($assignment['module_id']) && intval($assignment['module_id']) > 0) {
+                $wpdb->query($wpdb->prepare(
+                    "INSERT IGNORE INTO {$module_link_table} (module_id, lecturer_id) VALUES (%d, %d)",
+                    intval($assignment['module_id']),
+                    $staff_id
+                ));
+            }
+        }
 }
 
 // ✅ Handle the repetitive logic for fetching staff data
@@ -296,7 +312,7 @@ function nds_add_staff()
         wp_die('A user with this email already exists.');
     }
 
-    $default_password = $is_lecturer ? ('Nds@' . date('Y')) : wp_generate_password(16, true, true);
+    $default_password = 'Nds@' . date('Y');
 
     // Create a new WordPress user
     $user_id = wp_insert_user([

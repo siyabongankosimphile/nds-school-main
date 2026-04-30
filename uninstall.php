@@ -38,6 +38,8 @@ function nds_school_uninstall() {
         
         // Course related
         $wpdb->prefix . 'nds_timetable_sessions',
+        $wpdb->prefix . 'nds_module_lecturers',
+        $wpdb->prefix . 'nds_modules',
         $wpdb->prefix . 'nds_course_accreditations',
         $wpdb->prefix . 'nds_course_prerequisites',
         $wpdb->prefix . 'nds_course_lecturers',

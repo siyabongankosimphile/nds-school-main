@@ -56,6 +56,12 @@ function nds_program_card($program, $option = 1)
                     </div>
 
                     <div class="flex items-center text-sm text-gray-600">
+                        <i class="fas fa-cubes mr-1"></i>
+                        <span class="font-medium"><?php echo intval($program['module_count'] ?? 0); ?></span>
+                        <span class="text-gray-500 ml-1">Modules</span>
+                    </div>
+
+                    <div class="flex items-center text-sm text-gray-600">
                         <i class="fas fa-clock mr-1"></i>
                         <span class="font-medium"><?php echo esc_html(isset($program['duration_months']) ? $program['duration_months'] : '12'); ?></span>
                         <span class="text-gray-500 ml-1">Months</span>
@@ -76,6 +82,10 @@ function nds_program_card($program, $option = 1)
                     <a href="<?php echo admin_url('admin.php?page=nds-courses&edit_program=' . $program['id']); ?>"
                         class="inline-flex items-center px-3 py-1 text-xs font-medium text-white bg-gray-600 hover:bg-gray-700 rounded transition-colors shadow-sm">
                         <i class="fas fa-edit mr-1"></i>Edit
+                    </a>
+                    <a href="<?php echo admin_url('admin.php?page=nds-module-management&faculty_id=' . intval($program['faculty_id']) . '&program_id=' . intval($program['id'])); ?>"
+                        class="inline-flex items-center px-3 py-1 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors shadow-sm">
+                        <i class="fas fa-cubes mr-1"></i>Manage Modules
                     </a>
                 </div>
             </div>
@@ -106,13 +116,21 @@ function nds_program_card($program, $option = 1)
                     </div>
 
             <!-- Stats Section -->
-            <div class="grid grid-cols-3 gap-2 mb-4 pb-4 border-b border-gray-100 flex-shrink-0">
+            <div class="grid grid-cols-4 gap-2 mb-4 pb-4 border-b border-gray-100 flex-shrink-0">
                     <div class="text-center">
                         <div class="flex items-center justify-center text-sm text-gray-600 mb-1">
                             <span class="dashicons dashicons-book text-purple-600 text-base mr-1"></span>
                             <span class="font-semibold text-gray-900"><?php echo intval($program['course_count']); ?></span>
                         </div>
                         <p class="text-xs text-gray-500">Courses</p>
+                    </div>
+
+                    <div class="text-center">
+                        <div class="flex items-center justify-center text-sm text-gray-600 mb-1">
+                            <span class="dashicons dashicons-screenoptions text-indigo-600 text-base mr-1"></span>
+                            <span class="font-semibold text-gray-900"><?php echo intval($program['module_count'] ?? 0); ?></span>
+                        </div>
+                        <p class="text-xs text-gray-500">Modules</p>
                     </div>
 
                     <div class="text-center">
@@ -145,6 +163,11 @@ function nds_program_card($program, $option = 1)
                     <span class="dashicons dashicons-book mr-1 text-sm flex-shrink-0"></span>
                     <span class="truncate">Manage</span>
                     </a>
+                    <a href="<?php echo admin_url('admin.php?page=nds-module-management&faculty_id=' . intval($program['faculty_id']) . '&program_id=' . intval($program['id'])); ?>"
+                   class="flex-1 inline-flex items-center justify-center px-2 py-2 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors min-w-0">
+                    <span class="dashicons dashicons-screenoptions mr-1 text-sm flex-shrink-0"></span>
+                    <span class="truncate">Modules</span>
+                    </a>
             </div>
         </div>
     <?php
@@ -175,10 +198,14 @@ function nds_program_card($program, $option = 1)
                     </p>
                 <?php endif; ?>
 
-                <div class="grid grid-cols-2 gap-4 mb-6">
+                <div class="grid grid-cols-3 gap-4 mb-6">
                     <div class="bg-gray-50 rounded-xl p-3 border border-gray-100 transition-colors group-hover:bg-white group-hover:border-blue-100">
                         <div class="text-xs text-gray-500 mb-1">Qualifications</div>
                         <div class="text-lg font-bold text-gray-900"><?php echo intval($program['course_count']); ?></div>
+                    </div>
+                    <div class="bg-gray-50 rounded-xl p-3 border border-gray-100 transition-colors group-hover:bg-white group-hover:border-blue-100">
+                        <div class="text-xs text-gray-500 mb-1">Modules</div>
+                        <div class="text-lg font-bold text-gray-900"><?php echo intval($program['module_count'] ?? 0); ?></div>
                     </div>
                     <div class="bg-gray-50 rounded-xl p-3 border border-gray-100 transition-colors group-hover:bg-white group-hover:border-blue-100">
                         <div class="text-xs text-gray-500 mb-1">Duration</div>
@@ -197,6 +224,11 @@ function nds_program_card($program, $option = 1)
                    class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 bg-gray-100 text-gray-700 rounded-xl text-sm font-bold hover:bg-gray-200 transition-all active:scale-95">
                     <i class="fas fa-edit text-xs"></i>
                     Edit
+                </a>
+                <a href="<?php echo admin_url('admin.php?page=nds-module-management&faculty_id=' . intval($program['faculty_id']) . '&program_id=' . intval($program['id'])); ?>"
+                   class="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 bg-indigo-100 text-indigo-700 rounded-xl text-sm font-bold hover:bg-indigo-200 transition-all active:scale-95">
+                    <i class="fas fa-cubes text-xs"></i>
+                    Modules
                 </a>
             </div>
         </div>
@@ -224,10 +256,12 @@ function nds_programs_page_tailwind()
     if ($filter_faculty_id > 0) {
         $programs = $wpdb->get_results($wpdb->prepare("
         SELECT p.*,
-               COUNT(c.id) as course_count,
+               COUNT(DISTINCT c.id) as course_count,
+               COUNT(DISTINCT m.id) as module_count,
                ep.name as path_name
         FROM {$table_programs} p
         LEFT JOIN {$table_courses} c ON p.id = c.program_id
+           LEFT JOIN {$wpdb->prefix}nds_modules m ON m.course_id = c.id
         LEFT JOIN {$table_paths} ep ON p.faculty_id = ep.id
             WHERE p.faculty_id = %d
         GROUP BY p.id
@@ -237,10 +271,12 @@ function nds_programs_page_tailwind()
         // Load all programs if no faculty filter
         $programs = $wpdb->get_results("
         SELECT p.*,
-               COUNT(c.id) as course_count,
+               COUNT(DISTINCT c.id) as course_count,
+               COUNT(DISTINCT m.id) as module_count,
                ep.name as path_name
         FROM {$table_programs} p
         LEFT JOIN {$table_courses} c ON p.id = c.program_id
+           LEFT JOIN {$wpdb->prefix}nds_modules m ON m.course_id = c.id
         LEFT JOIN {$table_paths} ep ON p.faculty_id = ep.id
         GROUP BY p.id
         ORDER BY p.name
@@ -512,6 +548,7 @@ function nds_programs_page_tailwind()
                                                 <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-700">Program</th>
                                                 <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-700">Faculty</th>
                                                 <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-700">Qualifications</th>
+                                                <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-700">Modules</th>
                                                 <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-700">Duration (months)</th>
                                                 <th scope="col" class="px-4 py-3 text-left font-semibold text-gray-700">Type</th>
                                                 <th scope="col" class="px-4 py-3 text-right font-semibold text-gray-700">Actions</th>
@@ -537,6 +574,9 @@ function nds_programs_page_tailwind()
                                                         <?php echo intval($program['course_count']); ?>
                                                     </td>
                                                     <td class="px-4 py-3 align-top text-gray-700">
+                                                        <?php echo intval($program['module_count'] ?? 0); ?>
+                                                    </td>
+                                                    <td class="px-4 py-3 align-top text-gray-700">
                                                         <?php echo esc_html(isset($program['duration_months']) ? $program['duration_months'] : '12'); ?>
                                                     </td>
                                                     <td class="px-4 py-3 align-top text-gray-700">
@@ -555,6 +595,11 @@ function nds_programs_page_tailwind()
                                                                 <span class="dashicons dashicons-plus-alt2 mr-1 text-sm"></span>
                                                                 Add Qualification
                                                             </button>
+                                                            <a href="<?php echo admin_url('admin.php?page=nds-module-management&faculty_id=' . intval($program['faculty_id']) . '&program_id=' . intval($program['id'])); ?>"
+                                                               class="inline-flex items-center px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-medium">
+                                                                <i class="fas fa-cubes mr-1 text-sm"></i>
+                                                                Manage Modules
+                                                            </a>
                                                             <button type="button"
                                                                 onclick="confirmDelete(<?php echo $program['id']; ?>, '<?php echo esc_js($program['name']); ?>')"
                                                                 class="inline-flex items-center px-2 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-medium">
@@ -647,7 +692,7 @@ function nds_programs_page_tailwind()
 
                             <?php
                             // Use the same form template as the edit program page
-                            echo program_form('add', null, null);
+                            echo program_form(act: 'add', pathID: 0);
                             ?>
 
                         </div>
@@ -677,7 +722,7 @@ function nds_programs_page_tailwind()
                                 <input type="hidden" name="action" value="nds_create_course_ajax">
                                 <?php
                                 // Get program ID from the modal trigger - will be set by JavaScript
-                                echo course_form('add', null, null, null, true);
+                                echo course_form(typ: 'add', modal: true);
                                 ?>
                             </form>
                         </div>

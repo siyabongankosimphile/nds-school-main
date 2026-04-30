@@ -13,7 +13,7 @@ function nds_handle_room_form() {
     if (!isset($_POST['nds_room_action'])) {
         return;
     }
-    if (!current_user_can('manage_options')) {
+    if (!current_user_can('manage_options') && !function_exists('nds_can_manage_timetables') || (!current_user_can('manage_options') && !nds_can_manage_timetables())) {
         wp_die('Unauthorized');
     }
 
@@ -83,7 +83,7 @@ function nds_handle_room_form() {
 
 // Main Rooms Management Page
 function nds_rooms_page() {
-    if (!current_user_can('manage_options')) {
+    if (!current_user_can('manage_options') && !function_exists('nds_can_manage_timetables') || (!current_user_can('manage_options') && !nds_can_manage_timetables())) {
         wp_die('Unauthorized');
     }
     
@@ -416,9 +416,9 @@ function nds_rooms_page() {
                                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Code</th>
                                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Name & Equipment</th>
                                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Type</th>
-                                <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">Capacity</th>
+                                <th class="px-6 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Capacity</th>
                                 <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider">Location</th>
-                                <th class="px-6 py-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wider text-center">Status</th>
+                                <th class="px-6 py-3 text-center text-xs font-semibold text-gray-500 uppercase tracking-wider">Status</th>
                                 <th class="px-6 py-3 text-right text-xs font-semibold text-gray-500 uppercase tracking-wider">Actions</th>
                             </tr>
                         </thead>

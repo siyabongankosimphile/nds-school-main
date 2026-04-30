@@ -58,6 +58,44 @@ function nds_generate_program_code($name, $faculty_id, $wpdb = null, $programs_t
     return $code;
 }
 
+/**
+ * Resolve a valid default program type ID.
+ * Creates a minimal default row when lookup data is missing (common after DB restores).
+ */
+function nds_get_default_program_type_id($wpdb = null)
+{
+    if (!$wpdb) {
+        global $wpdb;
+    }
+
+    $program_types_table = $wpdb->prefix . 'nds_program_types';
+
+    $existing_id = (int) $wpdb->get_var(
+        "SELECT id FROM {$program_types_table} ORDER BY id ASC LIMIT 1"
+    );
+    if ($existing_id > 0) {
+        return $existing_id;
+    }
+
+    $inserted = $wpdb->insert(
+        $program_types_table,
+        [
+            'code' => 'DIPLOMA',
+            'name' => 'Diploma',
+            'program_type' => 'diploma',
+            'description' => 'Default program type created automatically.',
+            'duration_months' => 12,
+        ],
+        ['%s', '%s', '%s', '%s', '%d']
+    );
+
+    if ($inserted !== false && (int) $wpdb->insert_id > 0) {
+        return (int) $wpdb->insert_id;
+    }
+
+    return 0;
+}
+
 // Create a Program
 function nds_add_program()
 {
@@ -119,6 +157,13 @@ function nds_add_program()
     $program_color_data = $color_generator->generate_program_color($faculty_color, $program_index, $total_programs);
     $program_palette = $color_generator->generate_program_palette($faculty_color, $program_index, $total_programs, 20); // 20 courses max
 
+    $default_program_type_id = nds_get_default_program_type_id($wpdb);
+    if ($default_program_type_id <= 0) {
+        error_log('NDS Program Creation Failed: unable to resolve default program type. ' . $wpdb->last_error);
+        wp_redirect(add_query_arg('error', 'db_error', wp_get_referer()));
+        exit;
+    }
+
     $result = $wpdb->insert(
         $programs_table,
         [
@@ -128,7 +173,7 @@ function nds_add_program()
             'faculty_id' => $faculty_id,
             'color' => $program_color_data['hex'],
             'color_palette' => json_encode($program_palette),
-            'program_type_id' => 1 // Default to 'diploma'
+            'program_type_id' => $default_program_type_id
         ],
         ['%s', '%s', '%s', '%d', '%s', '%s', '%d']
     );
@@ -148,7 +193,7 @@ function nds_add_program()
                     'faculty_id' => $faculty_id,
                     'color' => $program_color_data['hex'],
                     'color_palette' => json_encode($program_palette),
-                    'program_type_id' => 1
+                    'program_type_id' => $default_program_type_id
                 ],
                 ['%s', '%s', '%s', '%d', '%s', '%s', '%d']
             );
@@ -267,6 +312,11 @@ function nds_add_program_ajax() {
     $program_color_data = $color_generator->generate_program_color($faculty_color, $program_index, $total_programs);
     $program_palette = $color_generator->generate_program_palette($faculty_color, $program_index, $total_programs, 20); // 20 courses max
 
+    $default_program_type_id = nds_get_default_program_type_id($wpdb);
+    if ($default_program_type_id <= 0) {
+        wp_send_json_error(['message' => 'Unable to resolve default program type. Please run migrations and try again.']);
+    }
+
     $result = $wpdb->insert(
         $programs_table,
         [
@@ -274,7 +324,7 @@ function nds_add_program_ajax() {
             'name' => $name,
             'description' => $description,
             'faculty_id' => $faculty_id,
-            'program_type_id' => 1, // Default to 'diploma'
+            'program_type_id' => $default_program_type_id,
             'color' => $program_color_data['hex'],
             'color_palette' => json_encode($program_palette)
         ],
@@ -295,10 +345,11 @@ function nds_add_program_ajax() {
                     'name' => $name,
                     'description' => $description,
                     'faculty_id' => $faculty_id,
-                    'program_type_id' => 1,
-                    'color' => $program_color
+                    'program_type_id' => $default_program_type_id,
+                    'color' => $program_color_data['hex'],
+                    'color_palette' => json_encode($program_palette)
                 ],
-                ['%s', '%s', '%s', '%d', '%d', '%s']
+                ['%s', '%s', '%s', '%d', '%d', '%s', '%s']
             );
             
             if ($result === false) {
@@ -704,7 +755,7 @@ function programForm($pathID, $act, $program = null)
 // Form to add a new program
 function nds_add_program_form()
 {
-    echo program_form('add', null, null);
+    echo program_form(act: 'add', pathID: 0);
 }
 
 function nds_display_programs_table($atts)

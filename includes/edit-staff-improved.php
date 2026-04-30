@@ -62,14 +62,18 @@ function nds_edit_staff_page_improved() {
     $faculties = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_faculties WHERE status = 'active' ORDER BY name", ARRAY_A);
     $programs = $wpdb->get_results("SELECT id, name, faculty_id FROM {$wpdb->prefix}nds_programs WHERE status = 'active' ORDER BY name", ARRAY_A);
     $qualifications = $wpdb->get_results("SELECT id, name, program_id FROM {$wpdb->prefix}nds_courses WHERE status = 'active' ORDER BY name", ARRAY_A);
+    $modules_data = $wpdb->get_results("SELECT id, name, course_id FROM {$wpdb->prefix}nds_modules ORDER BY name", ARRAY_A);
 
     // Get staff assignments
     $assignments = $wpdb->get_results($wpdb->prepare(
-        "SELECT c.name AS course_name, l.assigned_date, c.id as course_id, c.program_id, p.name AS program_name, p.faculty_id, f.name AS faculty_name
+        "SELECT c.name AS course_name, l.assigned_date, c.id as course_id, c.program_id, p.name AS program_name, p.faculty_id, f.name AS faculty_name,
+                ml.module_id, m.name AS module_name
          FROM {$link_table} l
          JOIN {$course_table} c ON c.id = l.course_id
          LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
          LEFT JOIN {$wpdb->prefix}nds_faculties f ON f.id = p.faculty_id
+         LEFT JOIN {$wpdb->prefix}nds_module_lecturers ml ON ml.lecturer_id = l.lecturer_id AND ml.module_id IN (SELECT id FROM {$wpdb->prefix}nds_modules WHERE course_id = c.id)
+         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = ml.module_id
          WHERE l.lecturer_id = %d
          ORDER BY l.assigned_date DESC",
         $staff_id
@@ -286,6 +290,7 @@ function nds_edit_staff_page_improved() {
                                     </div>
 
                                     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
                                         <div>
                                             <label class="block text-xs font-medium text-gray-700 mb-1.5">Faculty *</label>
                                             <select id="lecturerFaculty" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent">
@@ -309,6 +314,13 @@ function nds_edit_staff_page_improved() {
                                                 <option value="">Select qualification...</option>
                                             </select>
                                         </div>
+
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-700 mb-1.5">Module *</label>
+                                            <select id="lecturerModule" class="w-full px-3 py-2 text-sm border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent" disabled>
+                                                <option value="">Select module...</option>
+                                            </select>
+                                        </div>
                                     </div>
 
                                     <div class="mt-3">
@@ -322,12 +334,23 @@ function nds_edit_staff_page_improved() {
                                             <?php if (!empty($assignment['faculty_id']) && !empty($assignment['program_id']) && !empty($assignment['course_id'])): ?>
                                                 <div class="lecturer-assignment-item flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3">
                                                     <div class="text-sm text-gray-800">
-                                                        <?php echo esc_html(($assignment['faculty_name'] ?: 'Unknown faculty') . ' / ' . ($assignment['program_name'] ?: 'Unknown program') . ' / ' . $assignment['course_name']); ?>
+                                                        <?php
+                                                        $row_label = ($assignment['faculty_name'] ?: 'Unknown faculty') . ' / ' . ($assignment['program_name'] ?: 'Unknown program') . ' / ' . $assignment['course_name'];
+                                                        if (!empty($assignment['module_name'])) {
+                                                            $row_label .= ' / ' . $assignment['module_name'];
+                                                        }
+                                                        echo esc_html($row_label);
+                                                        ?>
                                                     </div>
                                                     <div class="flex items-center gap-2">
                                                         <input type="hidden" name="lecturer_faculty_id[]" value="<?php echo intval($assignment['faculty_id']); ?>">
                                                         <input type="hidden" name="lecturer_program_id[]" value="<?php echo intval($assignment['program_id']); ?>">
                                                         <input type="hidden" name="lecturer_course_id[]" value="<?php echo intval($assignment['course_id']); ?>">
+                                                        <?php if (!empty($assignment['module_id'])): ?>
+                                                        <input type="hidden" name="lecturer_module_id[]" value="<?php echo intval($assignment['module_id']); ?>">
+                                                        <?php else: ?>
+                                                        <input type="hidden" name="lecturer_module_id[]" value="0">
+                                                        <?php endif; ?>
                                                         <button type="button" class="remove-assignment-row px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors duration-200 text-sm">Remove</button>
                                                     </div>
                                                 </div>
@@ -491,10 +514,12 @@ function nds_edit_staff_page_improved() {
         const facultySelect = document.getElementById('lecturerFaculty');
         const programSelect = document.getElementById('lecturerProgram');
         const qualificationSelect = document.getElementById('lecturerQualification');
+            const moduleSelect = document.getElementById('lecturerModule');
         const addAssignmentBtn = document.getElementById('addLecturerAssignment');
         const assignmentList = document.getElementById('lecturerAssignmentList');
         const programsData = <?php echo wp_json_encode($programs); ?>;
         const qualificationsData = <?php echo wp_json_encode($qualifications); ?>;
+    const modulesData = <?php echo wp_json_encode($modules_data); ?>;
 
         function resetSelect(selectEl, placeholder) {
             if (!selectEl) {
@@ -516,6 +541,33 @@ function nds_edit_staff_page_improved() {
             programSelect.disabled = true;
             qualificationSelect.disabled = true;
         }
+
+            function populateModules() {
+                if (!qualificationSelect || !moduleSelect) {
+                    return;
+                }
+
+                const courseId = parseInt(qualificationSelect.value || '0', 10);
+                resetSelect(moduleSelect, 'Select module...');
+
+                if (!courseId) {
+                    moduleSelect.disabled = true;
+                    return;
+                }
+
+                const filteredModules = modulesData.filter(function(module) {
+                    return parseInt(module.course_id, 10) === courseId;
+                });
+
+                filteredModules.forEach(function(module) {
+                    const option = document.createElement('option');
+                    option.value = module.id;
+                    option.textContent = module.name;
+                    moduleSelect.appendChild(option);
+                });
+
+                moduleSelect.disabled = filteredModules.length === 0;
+            }
 
         function populatePrograms() {
             if (!facultySelect || !programSelect || !qualificationSelect) {
@@ -572,6 +624,10 @@ function nds_edit_staff_page_improved() {
             });
 
             qualificationSelect.disabled = filteredQualifications.length === 0;
+                    if (moduleSelect) {
+                        resetSelect(moduleSelect, 'Select module...');
+                        moduleSelect.disabled = true;
+                    }
         }
 
         function removeAssignmentItem(button) {
@@ -607,29 +663,33 @@ function nds_edit_staff_page_improved() {
             const programId = programSelect.value || '';
             const qualificationId = qualificationSelect.value || '';
 
-            if (!facultyId || !programId || !qualificationId) {
-                window.alert('Select faculty, program, and qualification before clicking Add.');
+                const moduleId = moduleSelect ? (moduleSelect.value || '') : '';
+
+                if (!facultyId || !programId || !qualificationId || !moduleId) {
+                    window.alert('Select faculty, program, qualification, and module before clicking Add.');
                 return;
             }
 
-            const duplicate = assignmentList.querySelector(`input[name="lecturer_course_id[]"][value="${qualificationId}"]`);
+                const duplicate = assignmentList.querySelector(`input[name="lecturer_module_id[]"][value="${moduleId}"]`);
             if (duplicate) {
-                window.alert('That qualification has already been added.');
+                    window.alert('That module has already been added.');
                 return;
             }
 
             const facultyLabel = facultySelect.options[facultySelect.selectedIndex].text;
             const programLabel = programSelect.options[programSelect.selectedIndex].text;
             const qualificationLabel = qualificationSelect.options[qualificationSelect.selectedIndex].text;
+                const moduleLabel = moduleSelect ? moduleSelect.options[moduleSelect.selectedIndex].text : '';
 
             const item = document.createElement('div');
             item.className = 'lecturer-assignment-item flex items-center justify-between gap-3 rounded-lg border border-gray-200 bg-gray-50 px-4 py-3';
             item.innerHTML = `
-                <div class="text-sm text-gray-800">${facultyLabel} / ${programLabel} / ${qualificationLabel}</div>
+                    <div class="text-sm text-gray-800">${facultyLabel} / ${programLabel} / ${qualificationLabel} / ${moduleLabel}</div>
                 <div class="flex items-center gap-2">
                     <input type="hidden" name="lecturer_faculty_id[]" value="${facultyId}">
                     <input type="hidden" name="lecturer_program_id[]" value="${programId}">
                     <input type="hidden" name="lecturer_course_id[]" value="${qualificationId}">
+                        <input type="hidden" name="lecturer_module_id[]" value="${moduleId}">
                     <button type="button" class="remove-assignment-row px-3 py-1.5 border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-100 transition-colors duration-200 text-sm">Remove</button>
                 </div>
             `;
@@ -746,6 +806,10 @@ function nds_edit_staff_page_improved() {
         if (programSelect) {
             programSelect.addEventListener('change', populateQualifications);
         }
+
+            if (qualificationSelect) {
+                qualificationSelect.addEventListener('change', populateModules);
+            }
 
         if (addAssignmentBtn) {
             addAssignmentBtn.addEventListener('click', addAssignmentToList);

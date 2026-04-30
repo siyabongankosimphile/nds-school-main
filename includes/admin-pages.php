@@ -14,6 +14,7 @@ require_once plugin_dir_path(__FILE__) . 'staff-functions.php';
 require_once plugin_dir_path(__FILE__) . 'path-functions.php';
 require_once plugin_dir_path(__FILE__) . 'education-management.php';
 require_once plugin_dir_path(__FILE__) . 'courses-functions.php';
+require_once plugin_dir_path(__FILE__) . 'module-management.php';
 require_once plugin_dir_path(__FILE__) . 'career-paths-functions.php';
 require_once plugin_dir_path(__FILE__) . 'course-management-ajax.php';
 require_once plugin_dir_path(__FILE__) . 'applicants-management.php';
@@ -896,67 +897,6 @@ function course_form($typ, $course = null, $program_id = null, $url = null, $mod
                     class="mt-1 p-2 border border-gray-300 rounded-md focus:ring-blue-500 focus:border-blue-500">
             </div>
         </div>
-
-        <!-- Schedule / Timetable Section -->
-        <fieldset class="space-y-4 mt-6">
-            <legend class="text-lg font-semibold text-gray-700">Qualification Schedule / Timetable</legend>
-            <hr>
-            <?php
-            // Get staff/lecturers for schedule assignment
-            // First try to get staff with lecturer-related roles
-            $staff = $wpdb->get_results("
-                SELECT id, first_name, last_name, role
-                FROM {$wpdb->prefix}nds_staff 
-                WHERE role IS NOT NULL 
-                AND (
-                    LOWER(role) LIKE '%lecturer%' 
-                    OR LOWER(role) LIKE '%instructor%' 
-                    OR LOWER(role) LIKE '%teacher%' 
-                    OR LOWER(role) LIKE '%professor%'
-                    OR LOWER(role) LIKE '%trainer%'
-                )
-                ORDER BY first_name, last_name
-            ", ARRAY_A);
-            
-            // If no lecturers found, get all staff as fallback
-            if (empty($staff)) {
-                $staff = $wpdb->get_results("
-                    SELECT id, first_name, last_name, role
-                    FROM {$wpdb->prefix}nds_staff 
-                    WHERE status = 'active' OR status IS NULL
-                    ORDER BY first_name, last_name
-                    LIMIT 50
-                ", ARRAY_A);
-            }
-            
-            // Get first lecturer associated with this qualification
-            $first_lecturer_id = null;
-            if (isset($course) && isset($course->id)) {
-                $first_lecturer = $wpdb->get_row($wpdb->prepare("
-                    SELECT lecturer_id 
-                    FROM {$wpdb->prefix}nds_course_lecturers 
-                    WHERE course_id = %d 
-                    ORDER BY assigned_at ASC 
-                    LIMIT 1
-                ", $course->id), ARRAY_A);
-                if ($first_lecturer && isset($first_lecturer['lecturer_id'])) {
-                    $first_lecturer_id = intval($first_lecturer['lecturer_id']);
-                }
-            }
-            
-            // Include schedule fields component
-            require_once plugin_dir_path(__FILE__) . 'partials/schedule-fields.php';
-            if (function_exists('nds_render_schedule_fields')) {
-                $course_id_for_schedules = isset($course) && isset($course->id) ? intval($course->id) : 0;
-                nds_render_schedule_fields([
-                    'lecturers' => $staff ?? [],
-                    'prefix' => 'schedule',
-                    'course_id' => $course_id_for_schedules,
-                    'default_lecturer_id' => $first_lecturer_id
-                ]);
-            }
-            ?>
-        </fieldset>
 
         <div class="flex justify-end">
             <input type="submit" name="submit_<?php echo $typ; ?>_course"
@@ -4235,8 +4175,23 @@ function nds_edit_carousel_slide_page() {
     $carousel_admin->edit_carousel_slide_page();
 }
 
+// ================= Timetable & Venue Management =================
+function nds_timetable_management_page() {
+    // Check permissions
+    if (!nds_can_manage_timetables()) {
+        wp_die('You do not have permission to manage timetables.');
+    }
+    
+    // Load the timetable management page
+    require_once plugin_dir_path(__FILE__) . 'timetable-schedule-management.php';
+}
+
 // ================= Calendar / Timetable =================
 function nds_calendar_page() {
+    if (!current_user_can('manage_options') && !nds_can_manage_timetables()) {
+        wp_die('You do not have permission to view the calendar.');
+    }
+
     // Load the calendar page
     require_once plugin_dir_path(__FILE__) . 'calendar.php';
     $calendar = new NDS_Calendar();

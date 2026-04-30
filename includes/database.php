@@ -1029,6 +1029,23 @@ function nds_school_create_tables()
     ) $charset_collate;";
     dbDelta($sql_notifications);
 
+    // -------------------------------------------------------------------------
+    // MODULE LECTURERS (M2M: Modules ↔ Lecturers - Module-level assignment)
+    // -------------------------------------------------------------------------
+    $t_module_lecturers = $wpdb->prefix . 'nds_module_lecturers';
+    $sql_module_lecturers = "CREATE TABLE IF NOT EXISTS $t_module_lecturers (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        module_id INT NOT NULL,
+        lecturer_id INT NOT NULL,
+        assigned_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (module_id) REFERENCES $t_modules(id) ON DELETE CASCADE,
+        FOREIGN KEY (lecturer_id) REFERENCES $t_staff(id) ON DELETE CASCADE,
+        UNIQUE KEY unique_module_lecturer (module_id, lecturer_id),
+        INDEX idx_lecturer (lecturer_id),
+        INDEX idx_module (module_id)
+    ) $charset_collate;";
+    dbDelta($sql_module_lecturers);
+
     // Backfill claim/import metadata from claimed_learners into students (idempotent)
     $backfill_sql = "
         UPDATE $t_students s

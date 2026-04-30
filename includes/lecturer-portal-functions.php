@@ -34,6 +34,51 @@ function nds_staff_get_lecturer_course_ids($staff_id) {
     return array_values(array_unique(array_map('intval', $rows ?: array())));
 }
 
+/**
+ * Get module IDs assigned to a lecturer (NEW: Module-level assignment)
+ * 
+ * @param int $staff_id Lecturer ID
+ * @return array Array of module IDs assigned to the lecturer
+ */
+function nds_staff_get_lecturer_module_ids($staff_id) {
+    global $wpdb;
+
+    if ($staff_id <= 0) {
+        return array();
+    }
+
+    $rows = $wpdb->get_col($wpdb->prepare(
+        "SELECT module_id FROM {$wpdb->prefix}nds_module_lecturers WHERE lecturer_id = %d",
+        $staff_id
+    ));
+
+    return array_values(array_unique(array_map('intval', $rows ?: array())));
+}
+
+/**
+ * Get courses containing modules assigned to a lecturer (NEW: derived from modules)
+ * 
+ * @param int $staff_id Lecturer ID
+ * @return array Array of unique course IDs
+ */
+function nds_staff_get_lecturer_course_ids_from_modules($staff_id) {
+    global $wpdb;
+
+    if ($staff_id <= 0) {
+        return array();
+    }
+
+    $rows = $wpdb->get_col($wpdb->prepare(
+        "SELECT DISTINCT m.course_id 
+         FROM {$wpdb->prefix}nds_modules m
+         INNER JOIN {$wpdb->prefix}nds_module_lecturers ml ON m.id = ml.module_id
+         WHERE ml.lecturer_id = %d",
+        $staff_id
+    ));
+
+    return array_values(array_unique(array_map('intval', $rows ?: array())));
+}
+
 function nds_staff_course_is_owned_by_lecturer($staff_id, $course_id) {
     if ($staff_id <= 0 || $course_id <= 0) {
         return false;

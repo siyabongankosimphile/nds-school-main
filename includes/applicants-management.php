@@ -96,15 +96,14 @@ function nds_applicants_dashboard() {
     
     // Get total count - must match the applications query exactly
     // Business rule:
-    // - Exclude applications that have been fully accepted OR already converted to students.
-    // - Active list only shows in‑flight applications.
+    // - Exclude only applications that have been converted to students.
+    // - Active list shows all in-flight and accepted applications.
     // - Use COUNT(DISTINCT) to handle potential JOIN duplicates
     $total_count = $wpdb->get_var("
         SELECT COUNT(DISTINCT a.id)
         FROM {$wpdb->prefix}nds_applications a
         LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id
         WHERE a.status != 'converted_to_student'
-          AND a.status != 'accepted'
     ");
     
     // Get applications with form data (same filter as total_count)
@@ -120,7 +119,6 @@ function nds_applicants_dashboard() {
         FROM {$wpdb->prefix}nds_applications a
         LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id
         WHERE a.status != 'converted_to_student'
-          AND a.status != 'accepted'
         GROUP BY a.id
         ORDER BY a.submitted_at DESC
         LIMIT %d OFFSET %d
@@ -169,7 +167,6 @@ function nds_applicants_dashboard() {
         FROM {$wpdb->prefix}nds_applications a
         LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id
         WHERE a.status != 'converted_to_student'
-          AND a.status != 'accepted'
         GROUP BY a.id
         ORDER BY a.submitted_at DESC
     ", ARRAY_A);

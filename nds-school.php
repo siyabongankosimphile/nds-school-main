@@ -25,6 +25,7 @@ require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/calendar-functions.php';
 require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/notification-functions.php';
 require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/program-functions.php';
 require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/lecturer-portal-functions.php';
+require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/timetable-functions.php';
 
 /**
  * Shared password policy for NDS user-facing authentication.
@@ -149,8 +150,13 @@ add_action('init', function () {
 
     $user = wp_get_current_user();
 
-    // If the user is a pure subscriber, keep them out of wp-admin
+    // If the user is a pure subscriber, keep them out of wp-admin,
+    // except staff mapped to privileged front-office roles like Timetable Coordinator.
     if (in_array('subscriber', (array) $user->roles, true)) {
+        if (function_exists('nds_can_manage_timetables') && nds_can_manage_timetables()) {
+            return;
+        }
+
         // Option: send learners to the /portal/ dashboard instead of homepage
         $redirect_url = home_url('/portal/');
         wp_safe_redirect($redirect_url);
@@ -197,16 +203,6 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
         return $redirect_to;
     }
 
-    // Respect explicit target when present.
-    if (!empty($requested_redirect_to)) {
-        return $requested_redirect_to;
-    }
-
-    // Admins should land on the plugin dashboard (stable and always available).
-    if (user_can($user, 'manage_options')) {
-        return admin_url('admin.php?page=nds-academy');
-    }
-
     global $wpdb;
     $staff_row = $wpdb->get_row($wpdb->prepare(
         "SELECT id, role FROM {$wpdb->prefix}nds_staff WHERE user_id = %d LIMIT 1",
@@ -221,7 +217,33 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
         ), ARRAY_A);
     }
 
-    // Any mapped staff account should land in staff portal.
+    $staff_role = strtolower(trim((string) ($staff_row['role'] ?? '')));
+
+    // Timetable coordinators should never be trapped by login-page or portal redirect targets.
+    if ($staff_role === 'timetable coordinator') {
+        $requested_path = '';
+        if (!empty($requested_redirect_to)) {
+            $requested_path = (string) wp_parse_url($requested_redirect_to, PHP_URL_PATH);
+        }
+
+        if ($requested_path !== '' && strpos($requested_path, '/wp-admin/') === 0) {
+            return $requested_redirect_to;
+        }
+
+        return admin_url('admin.php?page=nds-timetable');
+    }
+
+    // Respect explicit target when present.
+    if (!empty($requested_redirect_to)) {
+        return $requested_redirect_to;
+    }
+
+    // Admins should land on the plugin dashboard (stable and always available).
+    if (user_can($user, 'manage_options')) {
+        return admin_url('admin.php?page=nds-academy');
+    }
+
+    // Any other mapped staff account should land in staff portal.
     if (!empty($staff_row)) {
         return home_url('/staff-portal/?tab=overview');
     }
@@ -1665,6 +1687,61 @@ function nds_restore_roles_backup_ajax() {
 }
 add_action('wp_ajax_nds_restore_roles_backup', 'nds_restore_roles_backup_ajax');
 
+// ============================================================================
+// AJAX: SCHEDULE MANAGEMENT (Timetable & Venue)
+// ============================================================================
+
+// Add Schedule
+function nds_add_schedule_ajax() {
+    if (!nds_can_manage_timetables()) {
+        wp_send_json_error('You do not have permission to manage timetables.');
+    }
+
+    $schedule_data = [
+        'course_id' => isset($_POST['course_id']) ? intval($_POST['course_id']) : 0,
+        'lecturer_id' => isset($_POST['lecturer_id']) ? intval($_POST['lecturer_id']) : 0,
+        'room_id' => isset($_POST['room_id']) ? intval($_POST['room_id']) : 0,
+        'days' => isset($_POST['days']) ? sanitize_text_field($_POST['days']) : '',
+        'valid_from' => isset($_POST['valid_from']) ? sanitize_text_field($_POST['valid_from']) : '',
+        'valid_to' => isset($_POST['valid_to']) ? sanitize_text_field($_POST['valid_to']) : '',
+        'start_time' => isset($_POST['start_time']) ? sanitize_text_field($_POST['start_time']) : '',
+        'end_time' => isset($_POST['end_time']) ? sanitize_text_field($_POST['end_time']) : '',
+        'session_type' => isset($_POST['session_type']) ? sanitize_text_field($_POST['session_type']) : 'lecture',
+        'location' => isset($_POST['location']) ? sanitize_text_field($_POST['location']) : ''
+    ];
+
+    $result = nds_create_schedule($schedule_data);
+    
+    if ($result['success']) {
+        wp_send_json_success($result);
+    } else {
+        wp_send_json_error($result);
+    }
+}
+add_action('wp_ajax_nds_add_schedule', 'nds_add_schedule_ajax');
+
+// Delete Schedule
+function nds_delete_schedule_ajax() {
+    if (!nds_can_manage_timetables()) {
+        wp_send_json_error('You do not have permission to manage timetables.');
+    }
+
+    $schedule_id = isset($_POST['schedule_id']) ? intval($_POST['schedule_id']) : 0;
+    
+    if (!$schedule_id) {
+        wp_send_json_error('Invalid schedule ID.');
+    }
+
+    $result = nds_delete_schedule($schedule_id);
+    
+    if ($result['success']) {
+        wp_send_json_success($result);
+    } else {
+        wp_send_json_error($result);
+    }
+}
+add_action('wp_ajax_nds_delete_schedule', 'nds_delete_schedule_ajax');
+
 // AJAX: enroll student to a course (create or update enrollment)
 function nds_enroll_student_ajax() {
     // Enhanced security checks
@@ -2339,6 +2416,17 @@ add_action('template_redirect', function () {
     if ($staff_id <= 0) {
         // No staff profile yet for this WP account
         wp_die(__('No staff profile found for your account. Please contact the administrator.', 'nds-school'));
+    }
+
+    global $wpdb;
+    $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+        "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+        $staff_id
+    ));
+
+    if (strtolower(trim($staff_role)) === 'timetable coordinator') {
+        wp_safe_redirect(admin_url('admin.php?page=nds-timetable'));
+        exit;
     }
 
     // Render a standalone full-screen staff dashboard (no theme header/nav)

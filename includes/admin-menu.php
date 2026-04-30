@@ -8,6 +8,47 @@ if (!defined('ABSPATH')) {
 }
 
 function nds_school_add_admin_menu() {
+    if (function_exists('nds_is_timetable_coordinator') && nds_is_timetable_coordinator()) {
+        add_menu_page(
+            'Timetable & Venues',
+            'Timetable & Venues',
+            'read',
+            'nds-timetable',
+            'nds_timetable_management_page',
+            'dashicons-calendar-alt',
+            6
+        );
+
+        add_submenu_page(
+            'nds-timetable',
+            'Timetable & Venues',
+            'Timetable Dashboard',
+            'read',
+            'nds-timetable',
+            'nds_timetable_management_page'
+        );
+
+        add_submenu_page(
+            'nds-timetable',
+            'Calendar',
+            'Calendar',
+            'read',
+            'nds-calendar',
+            'nds_calendar_page'
+        );
+
+        add_submenu_page(
+            'nds-timetable',
+            'Rooms & Venues',
+            'Rooms & Venues',
+            'read',
+            'nds-rooms',
+            'nds_rooms_page'
+        );
+
+        return;
+    }
+
     // ============================================================================
     // MAIN MENU
     // ============================================================================
@@ -131,6 +172,16 @@ function nds_school_add_admin_menu() {
         'manage_options',
         'nds-add-course',
         'nds_add_courses_page'
+    );
+
+    // Module Management
+    add_submenu_page(
+        'nds-academy',
+        'Manage Modules',
+        'Manage Modules',
+        'manage_options',
+        'nds-module-management',
+        'nds_module_management_page'
     );
 
     // ============================================================================
@@ -392,6 +443,18 @@ function nds_school_add_admin_menu() {
         'manage_options',
         'nds-applicants',
         'nds_applicants_dashboard'
+    );
+
+    // ============================================================================
+    // TIMETABLE & VENUE MANAGEMENT
+    // ============================================================================
+    add_submenu_page(
+        'nds-academy',
+        'Timetable & Venues',
+        'Timetable & Venues',
+        'manage_options',
+        'nds-timetable',
+        'nds_timetable_management_page'
     );
 
     // ============================================================================

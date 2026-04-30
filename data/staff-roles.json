@@ -3,10 +3,8 @@
         "Lecturer",
         "Admin",
         "Support",
-        "Program Coordinator",
-        "Head Chef",
-        "Cleaner"
+        "Timetable Coordinator"
     ],
-    "updated_at": "2026-01-15 13:52:39",
+    "updated_at": "2026-04-30 09:26:10",
     "updated_by": 1
 }

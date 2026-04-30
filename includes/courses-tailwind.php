@@ -1003,15 +1003,18 @@ function nds_courses_page_tailwind()
         </div> <!-- End Container -->
 
         <!-- Add Qualification Modal -->
-        <div id="addCourseModal" style="display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); z-index: 9999;" onclick="if(event.target === this) closeModal();">
+        <div id="addCourseModal" class="fixed inset-0 bg-black bg-opacity-50 z-50 hidden" style="display: none;" onclick="if(event.target === this) closeAddCourseModal();">
             <div class="flex items-center justify-center min-h-screen p-4">
                 <div class="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onclick="event.stopPropagation();">
                     <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                        <div class="flex items-center">
-                            <span class="dashicons dashicons-plus-alt2 text-blue-600 mr-3 text-xl"></span>
-                            <h2 class="text-xl font-semibold text-gray-900">Add New Qualification</h2>
+                        <div class="flex items-center min-w-0 flex-1">
+                            <span class="dashicons dashicons-plus-alt2 text-blue-600 mr-3 text-xl flex-shrink-0"></span>
+                            <div class="min-w-0 flex-1">
+                                <h3 class="text-xl font-semibold text-gray-900">Add New Qualification</h3>
+                                <p class="text-sm text-gray-500 mt-0.5 truncate" id="course-modal-program-label" style="display:none;">to <span id="modal-program-name" class="font-medium text-gray-700"></span></p>
+                            </div>
                         </div>
-                        <button type="button" onclick="closeModal()" class="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-lg hover:bg-gray-100">
+                        <button type="button" onclick="closeAddCourseModal()" class="text-gray-400 hover:text-gray-600 transition-colors p-2 rounded-lg hover:bg-gray-100 flex-shrink-0 ml-3">
                             <span class="dashicons dashicons-no-alt text-xl"></span>
                         </button>
                     </div>
@@ -1019,115 +1022,7 @@ function nds_courses_page_tailwind()
                         <form method="POST" action="javascript:void(0);" onsubmit="event.preventDefault(); submitCourseForm(this);">
                             <?php wp_nonce_field('nds_course_nonce', 'nds_course_nonce'); ?>
                             <input type="hidden" name="action" value="nds_create_course_ajax">
-
-                            <div class="space-y-6">
-                                <div>
-                                    <label for="course_name" class="block text-sm font-semibold text-gray-900 mb-2">
-                                        Qualification Name <span class="text-red-500">*</span>
-                                    </label>
-                                    <input type="text" id="course_name" name="name"
-                                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                        placeholder="e.g., French Cuisine Fundamentals" required>
-                                </div>
-
-                                <div>
-                                    <label for="program_id" class="block text-sm font-semibold text-gray-900 mb-2">
-                                        Program <span class="text-red-500">*</span>
-                                    </label>
-                                    <select id="program_id" name="program_id" data-auto-select="program_id"
-                                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent" required>
-                                        <option value="">Select Program</option>
-                                        <?php foreach ($programs as $program): ?>
-                                            <?php $selected = ($selected_program_id && $program['id'] == $selected_program_id) ? ' selected' : ''; ?>
-                                            <option value="<?php echo $program['id']; ?>" <?php echo $selected; ?>><?php echo esc_html($program['program_name']); ?></option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                </div>
-
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div>
-                                        <label for="course_code" class="block text-sm font-semibold text-gray-900 mb-2">
-                                            Qualification Code
-                                        </label>
-                                        <input type="text" id="course_code" name="code"
-                                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                            placeholder="e.g., CUL101">
-                                    </div>
-
-                                    <div>
-                                        <label for="duration" class="block text-sm font-semibold text-gray-900 mb-2">
-                                            Duration (weeks)
-                                        </label>
-                                        <input type="number" id="duration" name="duration"
-                                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                            placeholder="12" min="1">
-                                    </div>
-                                </div>
-
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                                    <div>
-                                        <label for="start_date" class="block text-sm font-semibold text-gray-900 mb-2">
-                                            Start Date
-                                        </label>
-                                        <input type="date" id="start_date" name="start_date"
-                                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent">
-                                    </div>
-
-                                    <div>
-                                        <label for="end_date" class="block text-sm font-semibold text-gray-900 mb-2">
-                                            End Date
-                                        </label>
-                                        <input type="date" id="end_date" name="end_date"
-                                            class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent">
-                                    </div>
-                                </div>
-
-                                <div>
-                                    <label for="description" class="block text-sm font-semibold text-gray-900 mb-2">
-                                        Description
-                                    </label>
-                                    <textarea id="description" name="description" rows="4"
-                                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent"
-                                        placeholder="Describe the skills, techniques, and knowledge students will learn..."></textarea>
-                                </div>
-
-                                <!-- Schedule / Timetable (reusable component) -->
-                                <?php
-                                $schedule_fields_path = plugin_dir_path(__FILE__) . 'partials/schedule-fields.php';
-                                if (file_exists($schedule_fields_path)) {
-                                    require_once $schedule_fields_path;
-                                    if (function_exists('nds_render_schedule_fields')) {
-                                        nds_render_schedule_fields(array(
-                                            'lecturers' => $staff ?? array(),
-                                            'prefix' => 'schedule'
-                                        ));
-                                    }
-                                }
-                                ?>
-
-                                <div>
-                                    <label for="status" class="block text-sm font-semibold text-gray-900 mb-2">
-                                        Status
-                                    </label>
-                                    <select id="status" name="status"
-                                        class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent">
-                                        <option value="active">Active</option>
-                                        <option value="inactive">Inactive</option>
-                                        <option value="draft">Draft</option>
-                                    </select>
-                                </div>
-                            </div>
-
-                            <div class="flex items-center justify-end space-x-3 mt-8 pt-6 border-t border-gray-200">
-                                <button type="button" onclick="closeModal()"
-                                    class="px-6 py-3 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 transition-colors">
-                                    Cancel
-                                </button>
-                                <button type="submit"
-                                    class="px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-all duration-200 font-medium shadow-md hover:shadow-lg">
-                                    Create Qualification
-                                </button>
-                            </div>
+                            <?php echo course_form(typ: 'add', modal: true); ?>
                         </form>
                     </div>
                 </div>
@@ -1242,12 +1137,82 @@ function nds_courses_page_tailwind()
         <?php endif; ?>
 
         <script>
-            function closeModal() {
+            function openAddCourseModal(programId = null, programName = null) {
                 const modal = document.getElementById('addCourseModal');
                 if (modal) {
+                    if (modal.parentElement !== document.body) {
+                        document.body.appendChild(modal);
+                    }
+
+                    // Show/hide program label
+                    const labelEl = modal.querySelector('#course-modal-program-label');
+                    const nameSpan = modal.querySelector('#modal-program-name');
+                    if (programId && programName) {
+                        if (nameSpan) nameSpan.textContent = programName;
+                        if (labelEl) labelEl.style.display = '';
+                    } else {
+                        if (labelEl) labelEl.style.display = 'none';
+                    }
+
+                    const form = modal.querySelector('form');
+                    if (form && programId) {
+                        const existingInput = form.querySelector('input[name="program_id"]');
+                        if (existingInput) existingInput.remove();
+
+                        const programSelect = form.querySelector('select[name="program_id"]');
+                        if (programSelect) {
+                            const selectContainer = programSelect.closest('.flex.flex-col');
+                            if (selectContainer) selectContainer.style.display = 'none';
+                            programSelect.required = false;
+                            programSelect.value = String(programId);
+                        }
+
+                        const hiddenInput = document.createElement('input');
+                        hiddenInput.type = 'hidden';
+                        hiddenInput.name = 'program_id';
+                        hiddenInput.value = programId;
+                        form.appendChild(hiddenInput);
+                    }
+
+                    modal.classList.remove('hidden');
+                    modal.classList.add('flex', 'items-center', 'justify-center');
+                    modal.style.display = 'flex';
+                    document.body.style.overflow = 'hidden';
+                }
+            }
+
+            function closeAddCourseModal() {
+                const modal = document.getElementById('addCourseModal');
+                if (modal) {
+                    modal.classList.add('hidden');
+                    modal.classList.remove('flex', 'items-center', 'justify-center');
                     modal.style.display = 'none';
                     document.body.style.overflow = '';
+
+                    const form = modal.querySelector('form');
+                    if (form) {
+                        form.reset();
+                        const hiddenInput = form.querySelector('input[name="program_id"]');
+                        if (hiddenInput && hiddenInput.type === 'hidden') hiddenInput.remove();
+                        const programSelect = form.querySelector('select[name="program_id"]');
+                        if (programSelect) {
+                            const selectContainer = programSelect.closest('.flex.flex-col');
+                            if (selectContainer) selectContainer.style.display = '';
+                            programSelect.required = true;
+                            programSelect.value = '';
+                        }
+                    }
+
+                    const nameSpan = modal.querySelector('#modal-program-name');
+                    if (nameSpan) nameSpan.textContent = '';
+                    const labelEl = modal.querySelector('#course-modal-program-label');
+                    if (labelEl) labelEl.style.display = 'none';
                 }
+            }
+
+            // Keep backward-compat alias (in case other code calls closeModal)
+            function closeModal() {
+                closeAddCourseModal();
             }
 
             function closeModuleModal() {
@@ -1282,8 +1247,8 @@ function nds_courses_page_tailwind()
 
             function submitCourseForm(form) {
                 const formData = new FormData(form);
-                const submitBtn = form.querySelector('button[type="submit"]');
-                const originalText = submitBtn ? submitBtn.textContent.trim() : 'Create Qualification';
+                const submitBtn = form.querySelector('input[type="submit"]') || form.querySelector('button[type="submit"]');
+                const originalText = submitBtn ? (submitBtn.value || submitBtn.textContent.trim()) : 'Add Qualification';
 
                 formData.set('action', 'nds_create_course_ajax');
                 if (!formData.get('nonce') && formData.get('nds_course_nonce')) {
@@ -1291,7 +1256,11 @@ function nds_courses_page_tailwind()
                 }
 
                 if (submitBtn) {
-                    submitBtn.textContent = 'Creating...';
+                    if (submitBtn.tagName === 'INPUT') {
+                        submitBtn.value = 'Creating...';
+                    } else {
+                        submitBtn.textContent = 'Creating...';
+                    }
                     submitBtn.disabled = true;
                 }
 
@@ -1315,41 +1284,62 @@ function nds_courses_page_tailwind()
                         const firstBrace = trimmed.indexOf('{');
                         const lastBrace = trimmed.lastIndexOf('}');
                         if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-                            const candidate = trimmed.substring(firstBrace, lastBrace + 1);
-                            return JSON.parse(candidate);
+                            return JSON.parse(trimmed.substring(firstBrace, lastBrace + 1));
                         }
                         throw new Error('Invalid JSON response: ' + trimmed.substring(0, 300));
                     }
                 })
                 .then(data => {
                     if (data.success) {
-                        closeModal();
-                        alert('Qualification created successfully!');
-
-                        const selectedProgram = formData.get('program_id');
-                        let redirectUrl = '<?php echo admin_url('admin.php?page=nds-courses'); ?>';
-                        if (selectedProgram) {
-                            redirectUrl += '&program_id=' + encodeURIComponent(selectedProgram);
+                        closeAddCourseModal();
+                        if (typeof NDSNotification !== 'undefined') {
+                            NDSNotification.success('Qualification created successfully!');
+                        } else {
+                            alert('Qualification created successfully!');
                         }
-                        window.location.href = redirectUrl;
+                        setTimeout(() => {
+                            const selectedProgram = formData.get('program_id');
+                            let redirectUrl = '<?php echo admin_url('admin.php?page=nds-courses'); ?>';
+                            if (selectedProgram) {
+                                redirectUrl += '&program_id=' + encodeURIComponent(selectedProgram);
+                            }
+                            window.location.href = redirectUrl;
+                        }, 500);
                         return;
                     }
 
                     const errorMsg = data && data.data && data.data.message
                         ? data.data.message
-                        : 'Error creating qualification';
-                    alert('Error: ' + errorMsg);
+                        : (data.data || 'Error creating qualification');
+                    if (typeof NDSNotification !== 'undefined') {
+                        NDSNotification.error('Error: ' + errorMsg);
+                    } else {
+                        alert('Error: ' + errorMsg);
+                    }
 
                     if (submitBtn) {
-                        submitBtn.textContent = originalText;
+                        if (submitBtn.tagName === 'INPUT') {
+                            submitBtn.value = originalText;
+                        } else {
+                            submitBtn.textContent = originalText;
+                        }
                         submitBtn.disabled = false;
                     }
                 })
                 .catch(error => {
                     console.error('Error:', error);
-                    alert('An error occurred. Please try again. ' + (error.message || ''));
+                    const details = error && error.message ? (' ' + error.message) : '';
+                    if (typeof NDSNotification !== 'undefined') {
+                        NDSNotification.error('An error occurred. Please try again.' + details);
+                    } else {
+                        alert('An error occurred. Please try again.' + details);
+                    }
                     if (submitBtn) {
-                        submitBtn.textContent = originalText;
+                        if (submitBtn.tagName === 'INPUT') {
+                            submitBtn.value = originalText;
+                        } else {
+                            submitBtn.textContent = originalText;
+                        }
                         submitBtn.disabled = false;
                     }
                 });
@@ -1357,28 +1347,13 @@ function nds_courses_page_tailwind()
 
             // Modal trigger for Add Qualification
             document.addEventListener('DOMContentLoaded', function() {
-                // Handle links with href="#addCourseModal"
                 const modalLinks = document.querySelectorAll('a[href="#addCourseModal"]');
                 modalLinks.forEach(link => {
                     link.addEventListener('click', function(e) {
                         e.preventDefault();
-                        const modal = document.getElementById('addCourseModal');
-                        if (modal) {
-                            modal.style.display = 'block';
-                            document.body.style.overflow = 'hidden';
-                        }
+                        openAddCourseModal();
                     });
                 });
-
-                // Close modal when clicking outside
-                const courseModal = document.getElementById('addCourseModal');
-                if (courseModal) {
-                    courseModal.addEventListener('click', function(e) {
-                        if (e.target === this) {
-                            closeModal();
-                        }
-                    });
-                }
 
                 const moduleModal = document.getElementById('addModuleModal');
                 if (moduleModal) {
