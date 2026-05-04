@@ -1739,9 +1739,19 @@ function nds_add_schedule_ajax() {
         wp_send_json_error('You do not have permission to manage timetables.');
     }
 
+    $module_id = isset($_POST['module_id']) ? intval($_POST['module_id']) : 0;
+    if ($module_id <= 0) {
+        wp_send_json_error('Please select a module before creating a schedule.');
+    }
+
+    $module_context = nds_get_module_schedule_context($module_id);
+    if (!$module_context['success']) {
+        wp_send_json_error($module_context['message']);
+    }
+
     $schedule_data = [
-        'course_id' => isset($_POST['course_id']) ? intval($_POST['course_id']) : 0,
-        'lecturer_id' => isset($_POST['lecturer_id']) ? intval($_POST['lecturer_id']) : 0,
+        'course_id' => intval($module_context['course_id']),
+        'lecturer_id' => intval($module_context['lecturer_id']),
         'room_id' => isset($_POST['room_id']) ? intval($_POST['room_id']) : 0,
         'days' => isset($_POST['days']) ? sanitize_text_field($_POST['days']) : '',
         'valid_from' => isset($_POST['valid_from']) ? sanitize_text_field($_POST['valid_from']) : '',
