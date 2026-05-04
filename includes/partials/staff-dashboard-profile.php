@@ -9,9 +9,6 @@ $profile_error = isset($_GET['profile_error']) ? sanitize_text_field(wp_unslash(
 $staff_profile = is_array($staff_data ?? null) ? $staff_data : array();
 $portal_user = wp_get_current_user();
 $staff_email = $staff_profile['email'] ?? ($portal_user->user_email ?? '');
-$profile_form_action = isset($profile_form_action) && is_string($profile_form_action) && $profile_form_action !== ''
-    ? $profile_form_action
-    : 'nds_portal_update_staff_profile';
 ?>
 
 <div class="max-w-4xl space-y-6">
@@ -33,7 +30,7 @@ $profile_form_action = isset($profile_form_action) && is_string($profile_form_ac
     <?php endif; ?>
 
     <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="space-y-6">
-        <input type="hidden" name="action" value="<?php echo esc_attr($profile_form_action); ?>">
+        <input type="hidden" name="action" value="nds_portal_update_staff_profile">
         <?php wp_nonce_field('nds_staff_profile_action', 'nds_staff_profile_nonce'); ?>
 
         <div class="bg-white border border-gray-200 rounded-2xl shadow-sm p-6 space-y-5">
