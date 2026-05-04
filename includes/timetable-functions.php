@@ -55,6 +55,62 @@ function nds_can_manage_timetables() {
 }
 
 /**
+ * Determine whether current request is for the frontend timetable coordinator portal.
+ */
+function nds_is_frontend_timetable_portal_request() {
+    if ((int) get_query_var('nds_timetable_portal') === 1) {
+        return true;
+    }
+
+    if (is_admin()) {
+        return false;
+    }
+
+    $request_uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+    $request_path = $request_uri !== '' ? (string) wp_parse_url($request_uri, PHP_URL_PATH) : '';
+    $portal_path = (string) wp_parse_url(home_url('/timetable-portal/'), PHP_URL_PATH);
+
+    if ($request_path === '' || $portal_path === '') {
+        return false;
+    }
+
+    return strpos(untrailingslashit($request_path), untrailingslashit($portal_path)) === 0;
+}
+
+/**
+ * Resolve timetable page URL for current context.
+ * Uses frontend timetable portal when active, otherwise defaults to wp-admin page.
+ */
+function nds_get_timetable_page_url($query_args = array()) {
+    $base_url = nds_is_frontend_timetable_portal_request()
+        ? home_url('/timetable-portal/')
+        : admin_url('admin.php?page=nds-timetable');
+
+    if (empty($query_args)) {
+        return $base_url;
+    }
+
+    return add_query_arg($query_args, $base_url);
+}
+
+/**
+ * Resolve rooms page URL for current context.
+ * Uses frontend timetable portal rooms tab when active.
+ */
+function nds_get_rooms_page_url($query_args = array()) {
+    $base_args = array('tab' => 'rooms');
+    $base_url = nds_is_frontend_timetable_portal_request()
+        ? add_query_arg($base_args, home_url('/timetable-portal/'))
+        : admin_url('admin.php?page=nds-rooms');
+
+    if (empty($query_args)) {
+        return $base_url;
+    }
+
+    return add_query_arg($query_args, $base_url);
+}
+
+/**
  * Get all rooms/venues
  */
 function nds_get_rooms($status = 'active') {
@@ -341,6 +397,66 @@ function nds_get_lecturers() {
         AND status = 'active'
         ORDER BY first_name, last_name
     ");
+}
+
+/**
+ * Resolve module context for schedule creation.
+ * Returns the linked course and the first assigned lecturer for that course (if any).
+ */
+function nds_get_module_schedule_context($module_id) {
+    global $wpdb;
+
+    $module_id = intval($module_id);
+    if ($module_id <= 0) {
+        return [
+            'success' => false,
+            'message' => 'Please select a valid module.'
+        ];
+    }
+
+    $module_row = $wpdb->get_row($wpdb->prepare(
+        "SELECT m.id AS module_id, m.name AS module_name, c.id AS course_id, c.code AS course_code, c.name AS course_name
+         FROM {$wpdb->prefix}nds_modules m
+         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
+         WHERE m.id = %d
+         LIMIT 1",
+        $module_id
+    ));
+
+    if (!$module_row) {
+        return [
+            'success' => false,
+            'message' => 'Selected module could not be found.'
+        ];
+    }
+
+    $lecturer_row = $wpdb->get_row($wpdb->prepare(
+        "SELECT cl.lecturer_id, s.first_name, s.last_name
+         FROM {$wpdb->prefix}nds_course_lecturers cl
+         INNER JOIN {$wpdb->prefix}nds_staff s ON s.id = cl.lecturer_id
+         WHERE cl.course_id = %d
+         ORDER BY cl.assigned_at ASC, cl.id ASC
+         LIMIT 1",
+        intval($module_row->course_id)
+    ));
+
+    $lecturer_id = 0;
+    $lecturer_name = '';
+    if ($lecturer_row && !empty($lecturer_row->lecturer_id)) {
+        $lecturer_id = intval($lecturer_row->lecturer_id);
+        $lecturer_name = trim(((string) $lecturer_row->first_name) . ' ' . ((string) $lecturer_row->last_name));
+    }
+
+    return [
+        'success' => true,
+        'course_id' => intval($module_row->course_id),
+        'course_name' => (string) $module_row->course_name,
+        'course_code' => (string) $module_row->course_code,
+        'module_id' => intval($module_row->module_id),
+        'module_name' => (string) $module_row->module_name,
+        'lecturer_id' => $lecturer_id,
+        'lecturer_name' => $lecturer_name
+    ];
 }
 
 /**

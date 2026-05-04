@@ -10,11 +10,12 @@ if (!nds_can_manage_timetables()) {
     wp_die('You do not have permission to manage timetables.');
 }
 
-$programs = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_programs ORDER BY name");
+$faculties = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_faculties ORDER BY name");
+$qualifications = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_program_types ORDER BY name");
+$programs = $wpdb->get_results("SELECT id, name, faculty_id, program_type_id FROM {$wpdb->prefix}nds_programs ORDER BY name");
 $current_program_id = isset($_GET['program_id']) ? intval($_GET['program_id']) : (isset($programs[0]) ? $programs[0]->id : 0);
 
 $rooms = nds_get_rooms();
-$lecturers = nds_get_lecturers();
 $program_schedules = $current_program_id ? nds_get_program_schedules($current_program_id) : [];
 
 // Count statistics
@@ -37,11 +38,56 @@ $current_program = $wpdb->get_row($wpdb->prepare(
 ));
 $program_name = $current_program ? $current_program->name : 'Select a Program';
 
-// Get all courses for selected program
-$courses = $current_program_id ? $wpdb->get_results($wpdb->prepare(
-    "SELECT id, code, name FROM {$wpdb->prefix}nds_courses WHERE program_id = %d AND status = 'active' ORDER BY name",
-    $current_program_id
-)) : [];
+// Build program/module catalog used by the create schedule form.
+$program_catalog = array_map(function($program) {
+    return [
+        'id' => intval($program->id),
+        'name' => (string) $program->name,
+        'faculty_id' => intval($program->faculty_id),
+        'qualification_id' => intval($program->program_type_id)
+    ];
+}, $programs);
+
+$module_rows = $wpdb->get_results(
+    "SELECT
+        m.id AS module_id,
+        m.name AS module_name,
+        c.id AS course_id,
+        c.code AS course_code,
+        c.name AS course_name,
+        p.id AS program_id,
+        p.faculty_id,
+        p.program_type_id,
+        cl.lecturer_id,
+        CONCAT(COALESCE(s.first_name, ''), ' ', COALESCE(s.last_name, '')) AS lecturer_name
+     FROM {$wpdb->prefix}nds_modules m
+     INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
+     INNER JOIN {$wpdb->prefix}nds_programs p ON p.id = c.program_id
+     LEFT JOIN (
+        SELECT course_id, MIN(id) AS first_assignment_id
+        FROM {$wpdb->prefix}nds_course_lecturers
+        GROUP BY course_id
+     ) first_cl ON first_cl.course_id = c.id
+     LEFT JOIN {$wpdb->prefix}nds_course_lecturers cl ON cl.id = first_cl.first_assignment_id
+     LEFT JOIN {$wpdb->prefix}nds_staff s ON s.id = cl.lecturer_id
+     WHERE c.status = 'active' AND p.status = 'active'
+     ORDER BY p.name, c.name, m.name"
+);
+
+$module_catalog = array_map(function($module) {
+    return [
+        'id' => intval($module->module_id),
+        'name' => (string) $module->module_name,
+        'course_id' => intval($module->course_id),
+        'course_name' => (string) $module->course_name,
+        'course_code' => (string) $module->course_code,
+        'program_id' => intval($module->program_id),
+        'faculty_id' => intval($module->faculty_id),
+        'qualification_id' => intval($module->program_type_id),
+        'lecturer_id' => intval($module->lecturer_id),
+        'lecturer_name' => trim((string) $module->lecturer_name)
+    ];
+}, $module_rows);
 ?>
 <div class="wrap">
     <h1 class="wp-heading-inline">
@@ -63,7 +109,7 @@ $courses = $current_program_id ? $wpdb->get_results($wpdb->prepare(
 
     <div class="bg-blue-50 border-l-4 border-blue-500 p-4 mb-6" style="background-color: #f0f7ff; border-left: 4px solid #0066cc; padding: 15px; margin: 20px 0;">
         <p style="margin: 0; color: #0066cc; font-weight: 500;">
-            <strong>ℹ️ Quick Guide:</strong> Select a program to view its course schedules. Add new schedules, assign lecturers to rooms, and manage venues. The system prevents double-booking conflicts.
+            <strong>ℹ️ Quick Guide:</strong> Select a program to view its schedules. When adding a schedule, choose faculty, qualification, program, and module. Lecturer assignment is automatic from backend lecturer-module mappings.
         </p>
     </div>
 
@@ -118,27 +164,44 @@ $courses = $current_program_id ? $wpdb->get_results($wpdb->prepare(
                     <form id="add_schedule_form" method="POST" action="">
                         <div class="nds-form-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
                             <div>
-                                <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 13px;">Course/Qualification:</label>
-                                <select name="course_id" id="course_id" required style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
-                                    <option value="">-- Select Course --</option>
-                                    <?php foreach ($courses as $course): ?>
-                                        <option value="<?php echo $course->id; ?>">
-                                            <?php echo esc_html($course->code . ' - ' . $course->name); ?>
-                                        </option>
+                                <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 13px;">Faculty:</label>
+                                <select id="schedule_faculty_id" required style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
+                                    <option value="">-- Select Faculty --</option>
+                                    <?php foreach ($faculties as $faculty): ?>
+                                        <option value="<?php echo intval($faculty->id); ?>"><?php echo esc_html($faculty->name); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
                             <div>
-                                <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 13px;">Lecturer:</label>
-                                <select name="lecturer_id" id="lecturer_id" style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
-                                    <option value="">-- No Lecturer Assigned --</option>
-                                    <?php foreach ($lecturers as $lecturer): ?>
-                                        <option value="<?php echo $lecturer->id; ?>">
-                                            <?php echo esc_html($lecturer->first_name . ' ' . $lecturer->last_name); ?>
-                                        </option>
+                                <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 13px;">Qualification:</label>
+                                <select id="schedule_qualification_id" required style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
+                                    <option value="">-- Select Qualification --</option>
+                                    <?php foreach ($qualifications as $qualification): ?>
+                                        <option value="<?php echo intval($qualification->id); ?>"><?php echo esc_html($qualification->name); ?></option>
                                     <?php endforeach; ?>
                                 </select>
                             </div>
+                        </div>
+
+                        <div class="nds-form-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
+                            <div>
+                                <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 13px;">Program:</label>
+                                <select id="schedule_program_id" required style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
+                                    <option value="">-- Select Program --</option>
+                                </select>
+                            </div>
+                            <div>
+                                <label style="display: block; margin-bottom: 4px; font-weight: 600; font-size: 13px;">Module:</label>
+                                <select name="module_id" id="schedule_module_id" required style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 13px;">
+                                    <option value="">-- Select Module --</option>
+                                </select>
+                            </div>
+                        </div>
+
+                        <input type="hidden" name="course_id" id="course_id" value="">
+
+                        <div id="auto_lecturer_hint" style="margin-bottom: 12px; padding: 10px 12px; border-radius: 4px; background: #f8fafc; color: #334155; font-size: 13px;">
+                            Select a module to preview the backend-assigned lecturer.
                         </div>
 
                         <div class="nds-form-grid-2" style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
@@ -309,6 +372,148 @@ $courses = $current_program_id ? $wpdb->get_results($wpdb->prepare(
 </div>
 
 <script>
+const scheduleProgramCatalog = <?php echo wp_json_encode($program_catalog); ?>;
+const scheduleModuleCatalog = <?php echo wp_json_encode($module_catalog); ?>;
+
+function resetSelectOptions(select, placeholder) {
+    if (!select) {
+        return;
+    }
+
+    select.innerHTML = '';
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = placeholder;
+    select.appendChild(option);
+}
+
+function populateSchedulePrograms() {
+    const facultyField = document.getElementById('schedule_faculty_id');
+    const qualificationField = document.getElementById('schedule_qualification_id');
+    const programField = document.getElementById('schedule_program_id');
+
+    if (!facultyField || !qualificationField || !programField) {
+        return;
+    }
+
+    const facultyId = parseInt(facultyField.value || '0', 10);
+    const qualificationId = parseInt(qualificationField.value || '0', 10);
+
+    resetSelectOptions(programField, '-- Select Program --');
+
+    const matchingPrograms = scheduleProgramCatalog.filter(function(program) {
+        const facultyMatch = facultyId > 0 ? parseInt(program.faculty_id, 10) === facultyId : true;
+        const qualificationMatch = qualificationId > 0 ? parseInt(program.qualification_id, 10) === qualificationId : true;
+        return facultyMatch && qualificationMatch;
+    });
+
+    matchingPrograms.forEach(function(program) {
+        const option = document.createElement('option');
+        option.value = String(program.id);
+        option.textContent = program.name;
+        programField.appendChild(option);
+    });
+}
+
+function updateLecturerHint(selectedModule) {
+    const hint = document.getElementById('auto_lecturer_hint');
+    if (!hint) {
+        return;
+    }
+
+    if (!selectedModule) {
+        hint.textContent = 'Select a module to preview the backend-assigned lecturer.';
+        hint.style.background = '#f8fafc';
+        hint.style.color = '#334155';
+        return;
+    }
+
+    if (parseInt(selectedModule.lecturer_id || 0, 10) > 0) {
+        hint.textContent = 'Lecturer will be assigned automatically: ' + (selectedModule.lecturer_name || 'Assigned Lecturer');
+        hint.style.background = '#ecfdf5';
+        hint.style.color = '#047857';
+        return;
+    }
+
+    hint.textContent = 'No lecturer is assigned to this module yet. You can still save; it will be created without a lecturer.';
+    hint.style.background = '#fef2f2';
+    hint.style.color = '#b91c1c';
+}
+
+function populateScheduleModules() {
+    const facultyField = document.getElementById('schedule_faculty_id');
+    const qualificationField = document.getElementById('schedule_qualification_id');
+    const programField = document.getElementById('schedule_program_id');
+    const moduleField = document.getElementById('schedule_module_id');
+    const courseField = document.getElementById('course_id');
+
+    if (!facultyField || !qualificationField || !programField || !moduleField || !courseField) {
+        return;
+    }
+
+    const facultyId = parseInt(facultyField.value || '0', 10);
+    const qualificationId = parseInt(qualificationField.value || '0', 10);
+    const programId = parseInt(programField.value || '0', 10);
+
+    resetSelectOptions(moduleField, '-- Select Module --');
+    courseField.value = '';
+
+    if (programId <= 0) {
+        updateLecturerHint(null);
+        return;
+    }
+
+    const matchingModules = scheduleModuleCatalog.filter(function(module) {
+        const programMatch = parseInt(module.program_id, 10) === programId;
+        const facultyMatch = facultyId > 0 ? parseInt(module.faculty_id, 10) === facultyId : true;
+        const qualificationMatch = qualificationId > 0 ? parseInt(module.qualification_id, 10) === qualificationId : true;
+        return programMatch && facultyMatch && qualificationMatch;
+    });
+
+    matchingModules.forEach(function(module) {
+        const option = document.createElement('option');
+        option.value = String(module.id);
+        option.textContent = module.name + ' (' + module.course_code + ')';
+        option.dataset.courseId = String(module.course_id);
+        moduleField.appendChild(option);
+    });
+
+    updateLecturerHint(null);
+}
+
+function syncModuleCourse() {
+    const moduleField = document.getElementById('schedule_module_id');
+    const courseField = document.getElementById('course_id');
+    if (!moduleField || !courseField) {
+        return;
+    }
+
+    const moduleId = parseInt(moduleField.value || '0', 10);
+    const selectedModule = scheduleModuleCatalog.find(function(module) {
+        return parseInt(module.id, 10) === moduleId;
+    }) || null;
+
+    courseField.value = selectedModule ? String(selectedModule.course_id) : '';
+    updateLecturerHint(selectedModule);
+}
+
+function getAjaxMessage(response, fallback) {
+    if (!response || typeof response !== 'object') {
+        return fallback;
+    }
+
+    const payload = response.data;
+    if (typeof payload === 'string' && payload.trim() !== '') {
+        return payload;
+    }
+
+    if (payload && typeof payload.message === 'string' && payload.message.trim() !== '') {
+        return payload.message;
+    }
+
+    return fallback;
+}
+
 function addSchedule() {
     const form = document.getElementById('add_schedule_form');
     const formData = new FormData(form);
@@ -316,8 +521,14 @@ function addSchedule() {
     // Collect checked days
     const days = Array.from(document.querySelectorAll('input[name="days[]"]:checked')).map(el => el.value).join(',');
     
+    const moduleId = formData.get('module_id');
+    if (!moduleId) {
+        alert('Please select a module');
+        return;
+    }
+
     if (!formData.get('course_id')) {
-        alert('Please select a course');
+        alert('Selected module is not linked to a valid course');
         return;
     }
     
@@ -348,9 +559,7 @@ function addSchedule() {
     
     formData.set('days', days);
     formData.set('action', 'nds_add_schedule');
-    formData.set('program_id', document.getElementById('program_filter').value);
-    
-    const url = new URL(window.location);
+    formData.set('program_id', document.getElementById('schedule_program_id').value || document.getElementById('program_filter').value);
     
     fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
         method: 'POST',
@@ -359,12 +568,13 @@ function addSchedule() {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(data.data.message);
+            alert(getAjaxMessage(data, 'Schedule created successfully.'));
             window.location.reload();
         } else {
-            if (data.data.conflicts) {
-                let conflictMsg = data.data.message + '\n\nConflicts:\n';
-                data.data.conflicts.forEach(conflict => {
+            const payload = (data && typeof data.data === 'object' && data.data !== null) ? data.data : null;
+            if (payload && Array.isArray(payload.conflicts) && payload.conflicts.length > 0) {
+                let conflictMsg = getAjaxMessage(data, 'Schedule conflict detected.') + '\n\nConflicts:\n';
+                payload.conflicts.forEach(conflict => {
                     const dateWindow = (conflict.valid_from || conflict.valid_to)
                         ? ` [${conflict.valid_from || 'Open'} to ${conflict.valid_to || 'Ongoing'}]`
                         : '';
@@ -372,7 +582,7 @@ function addSchedule() {
                 });
                 alert(conflictMsg);
             } else {
-                alert(data.data.message);
+                alert(getAjaxMessage(data, 'Unable to add schedule.'));
             }
         }
     })
@@ -402,10 +612,10 @@ function deleteSchedule(scheduleId) {
     .then(response => response.json())
     .then(data => {
         if (data.success) {
-            alert(data.data.message);
+            alert(getAjaxMessage(data, 'Schedule deleted successfully.'));
             window.location.reload();
         } else {
-            alert(data.data.message);
+            alert(getAjaxMessage(data, 'Unable to delete schedule.'));
         }
     })
     .catch(error => {
@@ -417,9 +627,33 @@ function deleteSchedule(scheduleId) {
 // Program filter
 document.getElementById('program_filter').addEventListener('change', function() {
     if (this.value) {
-        window.location.href = '<?php echo admin_url('admin.php?page=nds-timetable'); ?>&program_id=' + this.value;
+        window.location.href = '<?php echo esc_url_raw(nds_get_timetable_page_url()); ?>&program_id=' + this.value;
     }
 });
+
+['schedule_faculty_id', 'schedule_qualification_id'].forEach(function(fieldId) {
+    const field = document.getElementById(fieldId);
+    if (field) {
+        field.addEventListener('change', function() {
+            populateSchedulePrograms();
+            populateScheduleModules();
+            syncModuleCourse();
+        });
+    }
+});
+
+const scheduleProgramField = document.getElementById('schedule_program_id');
+if (scheduleProgramField) {
+    scheduleProgramField.addEventListener('change', function() {
+        populateScheduleModules();
+        syncModuleCourse();
+    });
+}
+
+const scheduleModuleField = document.getElementById('schedule_module_id');
+if (scheduleModuleField) {
+    scheduleModuleField.addEventListener('change', syncModuleCourse);
+}
 
 function updateScheduleLiveStatus() {
     const status = document.getElementById('scheduleLiveStatus');
@@ -479,6 +713,9 @@ function updateScheduleLiveStatus() {
 });
 
 updateScheduleLiveStatus();
+populateSchedulePrograms();
+populateScheduleModules();
+syncModuleCourse();
 </script>
 
 <style>
