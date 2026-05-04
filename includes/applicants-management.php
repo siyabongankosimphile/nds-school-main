@@ -53,8 +53,8 @@ function nds_applicants_dashboard() {
 
         switch ($action) {
             case 'delete':
-                nds_delete_application($id);
-                wp_redirect(admin_url('admin.php?page=nds-applicants&deleted=1'));
+                $deleted = nds_delete_application($id);
+                wp_redirect(admin_url('admin.php?page=nds-applicants&' . ($deleted ? 'deleted=1' : 'delete_blocked=1')));
                 exit;
             case 'view':
                 nds_view_application_details($id);
@@ -75,7 +75,20 @@ function nds_applicants_dashboard() {
         $application_id = intval($_POST['application_id']);
         $new_status     = sanitize_text_field($_POST['new_status']);
         $notes          = sanitize_textarea_field($_POST['notes'] ?? '');
+        $reject_reason  = sanitize_text_field($_POST['reject_reason'] ?? '');
         $notify_applicant = !empty($_POST['notify_applicant']);
+
+        if ($new_status === 'rejected') {
+            $reason_options = nds_get_rejection_reason_options();
+            if (empty($reject_reason) || !isset($reason_options[$reject_reason])) {
+                $_SESSION['nds_status_update_error'] = 'Please select a rejection reason before saving.';
+                wp_redirect(admin_url('admin.php?page=nds-applicants'));
+                exit;
+            }
+
+            $reason_note = 'Rejection reason: ' . $reason_options[$reject_reason];
+            $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+        }
         
         // Debug logging
         error_log("NDS Status Update (dashboard) - ID: $application_id, Status: $new_status, Notes: $notes, Notify: " . ($notify_applicant ? 'yes' : 'no'));
@@ -93,36 +106,84 @@ function nds_applicants_dashboard() {
     $page = isset($_GET['paged']) ? max(1, intval($_GET['paged'])) : 1;
     $per_page = 20;
     $offset = ($page - 1) * $per_page;
+
+    $filter_program_id = isset($_GET['filter_program_id']) ? max(0, intval($_GET['filter_program_id'])) : 0;
+    $filter_faculty_id = isset($_GET['filter_faculty_id']) ? max(0, intval($_GET['filter_faculty_id'])) : 0;
+    $filter_course_id = isset($_GET['filter_course_id']) ? max(0, intval($_GET['filter_course_id'])) : 0;
+
+    $where_clauses = array("a.status != 'converted_to_student'");
+    $where_values = array();
+
+    if ($filter_program_id > 0) {
+        $where_clauses[] = 'a.program_id = %d';
+        $where_values[] = $filter_program_id;
+    }
+
+    if ($filter_faculty_id > 0) {
+        $where_clauses[] = 'p.faculty_id = %d';
+        $where_values[] = $filter_faculty_id;
+    }
+
+    if ($filter_course_id > 0) {
+        $where_clauses[] = '(a.course_id = %d OR af.course_id = %d)';
+        $where_values[] = $filter_course_id;
+        $where_values[] = $filter_course_id;
+    }
+
+    $where_sql = implode(' AND ', $where_clauses);
     
     // Get total count - must match the applications query exactly
     // Business rule:
     // - Exclude only applications that have been converted to students.
     // - Active list shows all in-flight and accepted applications.
     // - Use COUNT(DISTINCT) to handle potential JOIN duplicates
-    $total_count = $wpdb->get_var("
+    $total_count_sql = "
         SELECT COUNT(DISTINCT a.id)
         FROM {$wpdb->prefix}nds_applications a
         LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id
-        WHERE a.status != 'converted_to_student'
-    ");
+        LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = a.program_id
+        WHERE {$where_sql}
+    ";
+
+    if (!empty($where_values)) {
+        $total_count = $wpdb->get_var($wpdb->prepare($total_count_sql, $where_values));
+    } else {
+        $total_count = $wpdb->get_var($total_count_sql);
+    }
     
     // Get applications with form data (same filter as total_count)
     // Use GROUP BY to prevent duplicates if multiple form records exist per application
-    $applications = $wpdb->get_results($wpdb->prepare("
+    $applications_sql = "
         SELECT 
             a.*,
             af.full_name,
             af.email,
             af.course_name,
             af.cell_no as phone,
-            af.submitted_at as form_submitted_at
+            af.submitted_at as form_submitted_at,
+            p.name as program_name,
+            p.faculty_id,
+            f.name as faculty_name,
+            c.name as qualification_name
         FROM {$wpdb->prefix}nds_applications a
         LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id
-        WHERE a.status != 'converted_to_student'
+        LEFT JOIN {$wpdb->prefix}nds_programs p ON p.id = a.program_id
+        LEFT JOIN {$wpdb->prefix}nds_faculties f ON f.id = p.faculty_id
+        LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = COALESCE(a.course_id, af.course_id)
+        WHERE {$where_sql}
         GROUP BY a.id
         ORDER BY a.submitted_at DESC
         LIMIT %d OFFSET %d
-    ", $per_page, $offset), ARRAY_A);
+    ";
+
+    $applications_query_values = $where_values;
+    $applications_query_values[] = $per_page;
+    $applications_query_values[] = $offset;
+    $applications = $wpdb->get_results($wpdb->prepare($applications_sql, $applications_query_values), ARRAY_A);
+
+    $filter_programs = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_programs WHERE status = 'active' ORDER BY name ASC", ARRAY_A);
+    $filter_faculties = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_faculties WHERE status = 'active' ORDER BY name ASC", ARRAY_A);
+    $filter_qualifications = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_courses WHERE status = 'active' ORDER BY name ASC", ARRAY_A);
     
     // Load Tailwind CSS (shared frontend bundle)
     $plugin_dir = plugin_dir_path(dirname(__FILE__));
@@ -330,6 +391,49 @@ function nds_applicants_dashboard() {
                     </div>
                 </div>
 
+                <div class="px-5 py-3 border-b border-gray-100 bg-gray-50">
+                    <form method="get" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
+                        <input type="hidden" name="page" value="nds-applicants">
+                        <div>
+                            <label for="filter_program_id" class="block text-xs font-medium text-gray-600 mb-1">Program</label>
+                            <select id="filter_program_id" name="filter_program_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                                <option value="">All programs</option>
+                                <?php foreach ($filter_programs as $program_option): ?>
+                                    <option value="<?php echo esc_attr($program_option['id']); ?>" <?php selected($filter_program_id, (int) $program_option['id']); ?>>
+                                        <?php echo esc_html($program_option['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="filter_faculty_id" class="block text-xs font-medium text-gray-600 mb-1">Faculty</label>
+                            <select id="filter_faculty_id" name="filter_faculty_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                                <option value="">All faculties</option>
+                                <?php foreach ($filter_faculties as $faculty_option): ?>
+                                    <option value="<?php echo esc_attr($faculty_option['id']); ?>" <?php selected($filter_faculty_id, (int) $faculty_option['id']); ?>>
+                                        <?php echo esc_html($faculty_option['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="filter_course_id" class="block text-xs font-medium text-gray-600 mb-1">Qualification</label>
+                            <select id="filter_course_id" name="filter_course_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
+                                <option value="">All qualifications</option>
+                                <?php foreach ($filter_qualifications as $qualification_option): ?>
+                                    <option value="<?php echo esc_attr($qualification_option['id']); ?>" <?php selected($filter_course_id, (int) $qualification_option['id']); ?>>
+                                        <?php echo esc_html($qualification_option['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div class="flex gap-2">
+                            <button type="submit" class="inline-flex items-center px-3 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium">Apply filters</button>
+                            <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants')); ?>" class="inline-flex items-center px-3 py-2 rounded-lg bg-white border border-gray-300 hover:bg-gray-50 text-gray-700 text-xs font-medium">Reset</a>
+                        </div>
+                    </form>
+                </div>
+
                 <div class="overflow-x-auto">
                     <table class="w-full divide-y divide-gray-200 text-sm">
                         <thead class="bg-gray-50">
@@ -340,6 +444,8 @@ function nds_applicants_dashboard() {
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">App #</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Name</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Email</th>
+                                <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Program</th>
+                                <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Faculty</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Course</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Status</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Submitted</th>
@@ -363,7 +469,13 @@ function nds_applicants_dashboard() {
                                             <?php echo esc_html($app['email']); ?>
                                         </td>
                                         <td class="px-5 py-2 whitespace-nowrap text-gray-700">
-                                            <?php echo esc_html($app['course_name']); ?>
+                                            <?php echo esc_html($app['program_name'] ?: 'Not linked'); ?>
+                                        </td>
+                                        <td class="px-5 py-2 whitespace-nowrap text-gray-700">
+                                            <?php echo esc_html($app['faculty_name'] ?: 'Not linked'); ?>
+                                        </td>
+                                        <td class="px-5 py-2 whitespace-nowrap text-gray-700">
+                                            <?php echo esc_html($app['qualification_name'] ?: $app['course_name']); ?>
                             </td>
                                         <td class="px-5 py-2 whitespace-nowrap">
                                             <?php
@@ -396,34 +508,13 @@ function nds_applicants_dashboard() {
                                                     <span class="dashicons dashicons-visibility text-xs mr-1"></span>
                                                     View
                                                 </a>
-                                                <button type="button"
-                                                        class="inline-flex items-center px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium update-status-btn"
-                                                        data-id="<?php echo $app['id']; ?>"
-                                                        data-status="<?php echo esc_attr($app['status']); ?>">
-                                                    <span class="dashicons dashicons-edit text-xs mr-1"></span>
-                                                    Update
-                                                </button>
-                                <?php if ($app['status'] === 'accepted'): ?>
-                                                    <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?page=nds-applicants&action=convert_to_student&id=' . $app['id']), 'nds_applicants_action_convert_to_student_' . $app['id'])); ?>"
-                                                       class="inline-flex items-center px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-medium"
-                                                       onclick="return confirm('Convert this application to a student record? This will remove it from applications.');">
-                                                        <span class="dashicons dashicons-migrate text-xs mr-1"></span>
-                                                        Convert
-                                                    </a>
-                                <?php endif; ?>
-                                                <a href="<?php echo esc_url(wp_nonce_url(admin_url('admin.php?page=nds-applicants&action=delete&id=' . $app['id']), 'nds_applicants_action_delete_' . $app['id'])); ?>"
-                                                   class="inline-flex items-center px-3 py-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-700 text-xs font-medium"
-                                                   onclick="return confirm('Are you sure you want to delete this application?');">
-                                                    <span class="dashicons dashicons-trash text-xs mr-1"></span>
-                                                    Delete
-                                                </a>
                                             </div>
                             </td>
                         </tr>
                         <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="8" class="px-5 py-6 text-center text-sm text-gray-500">
+                                    <td colspan="10" class="px-5 py-6 text-center text-sm text-gray-500">
                                         No applications found.
                                     </td>
                                 </tr>
@@ -446,10 +537,15 @@ function nds_applicants_dashboard() {
                             echo paginate_links(array(
                                 'base'      => add_query_arg('paged', '%#%'),
                                 'format'    => '',
-                'prev_text' => '&laquo;',
-                'next_text' => '&raquo;',
+                                'prev_text' => '&laquo;',
+                                'next_text' => '&raquo;',
                                 'total'     => $total_pages,
                                 'current'   => $page,
+                                'add_args'  => array_filter(array(
+                                    'filter_program_id' => $filter_program_id,
+                                    'filter_faculty_id' => $filter_faculty_id,
+                                    'filter_course_id'  => $filter_course_id,
+                                )),
                             ));
                             ?>
                         </div>
@@ -482,6 +578,17 @@ function nds_applicants_dashboard() {
                                 <option value="under_review">Under Review</option>
                                 <option value="accepted">Accepted</option>
                                 <option value="rejected">Rejected</option>
+                            </select>
+                        </div>
+
+                        <div id="rejection-reason-wrap" class="hidden">
+                            <label for="reject_reason" class="block text-sm font-semibold text-gray-900 mb-2">Rejection reason</label>
+                            <select name="reject_reason" id="reject_reason"
+                                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
+                                <option value="">Select reason</option>
+                                <?php foreach (nds_get_rejection_reason_options() as $reason_key => $reason_label): ?>
+                                    <option value="<?php echo esc_attr($reason_key); ?>"><?php echo esc_html($reason_label); ?></option>
+                                <?php endforeach; ?>
                             </select>
                         </div>
 
@@ -661,6 +768,23 @@ function nds_applicants_dashboard() {
             document.body.appendChild(statusModal);
         }
 
+        function toggleRejectReasonField() {
+            const statusField = document.getElementById('new_status');
+            const reasonWrap = document.getElementById('rejection-reason-wrap');
+            const reasonField = document.getElementById('reject_reason');
+
+            if (!statusField || !reasonWrap || !reasonField) return;
+
+            if (statusField.value === 'rejected') {
+                reasonWrap.classList.remove('hidden');
+                reasonField.required = true;
+            } else {
+                reasonWrap.classList.add('hidden');
+                reasonField.required = false;
+                reasonField.value = '';
+            }
+        }
+
         window.openStatusModal = function(id, status) {
             const modal = document.getElementById('status-modal');
             const idField = document.getElementById('modal-application-id');
@@ -668,6 +792,8 @@ function nds_applicants_dashboard() {
 
             if (idField && id) idField.value = id;
             if (statusField && status) statusField.value = status;
+
+            toggleRejectReasonField();
 
             if (modal) {
                 modal.classList.remove('hidden');
@@ -681,6 +807,12 @@ function nds_applicants_dashboard() {
                 openStatusModal(this.getAttribute('data-id'), this.getAttribute('data-status'));
             });
         });
+
+        const newStatusField = document.getElementById('new_status');
+        if (newStatusField) {
+            newStatusField.addEventListener('change', toggleRejectReasonField);
+            toggleRejectReasonField();
+        }
         
         if (statusModal) {
             statusModal.addEventListener('click', function(e) {
@@ -721,7 +853,29 @@ function nds_view_application_details($application_id) {
         $application_id = intval($_POST['application_id']);
         $new_status     = sanitize_text_field($_POST['new_status']);
         $notes          = sanitize_textarea_field($_POST['notes'] ?? '');
+        $reject_reason  = sanitize_text_field($_POST['reject_reason'] ?? '');
         $notify_applicant = !empty($_POST['notify_applicant']);
+
+        if ($new_status === 'rejected') {
+            $reason_options = nds_get_rejection_reason_options();
+            if (empty($reject_reason) || !isset($reason_options[$reject_reason])) {
+                $_SESSION['nds_status_update_error'] = 'Please select a rejection reason before saving.';
+                wp_redirect(
+                    add_query_arg(
+                        array(
+                            'page'   => 'nds-applicants',
+                            'action' => 'view',
+                            'id'     => $application_id,
+                        ),
+                        admin_url('admin.php')
+                    )
+                );
+                exit;
+            }
+
+            $reason_note = 'Rejection reason: ' . $reason_options[$reject_reason];
+            $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+        }
 
         // Debug logging
         error_log("NDS Status Update (details view) - ID: $application_id, Status: $new_status, Notes: $notes, Notify: " . ($notify_applicant ? 'yes' : 'no'));
@@ -1312,6 +1466,17 @@ function nds_view_application_details($application_id) {
                             </select>
                         </div>
 
+                        <div id="rejection-reason-wrap" class="hidden">
+                            <label for="reject_reason" class="block text-sm font-semibold text-gray-900 mb-2">Rejection reason</label>
+                            <select name="reject_reason" id="reject_reason"
+                                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
+                                <option value="">Select reason</option>
+                                <?php foreach (nds_get_rejection_reason_options() as $reason_key => $reason_label): ?>
+                                    <option value="<?php echo esc_attr($reason_key); ?>"><?php echo esc_html($reason_label); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+
                         <div>
                             <label for="notes" class="block text-sm font-semibold text-gray-900 mb-2">Notes</label>
                             <textarea name="notes" id="notes" rows="3"
@@ -1371,6 +1536,8 @@ function nds_view_application_details($application_id) {
         function openStatusModal(id, status) {
             const idField = document.getElementById('modal-application-id');
             const statusField = document.getElementById('new_status');
+            const reasonWrap = document.getElementById('rejection-reason-wrap');
+            const reasonField = document.getElementById('reject_reason');
 
             // #region agent log: openStatusModal called
             fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
@@ -1399,6 +1566,17 @@ function nds_view_application_details($application_id) {
             }
             if (statusField && status) {
                 statusField.value = status;
+            }
+
+            if (statusField && reasonWrap && reasonField) {
+                if (statusField.value === 'rejected') {
+                    reasonWrap.classList.remove('hidden');
+                    reasonField.required = true;
+                } else {
+                    reasonWrap.classList.add('hidden');
+                    reasonField.required = false;
+                    reasonField.value = '';
+                }
             }
 
             if (statusModal) {
@@ -1458,6 +1636,24 @@ function nds_view_application_details($application_id) {
                 openStatusModal(this.dataset.id, this.dataset.status);
             });
         });
+
+        const newStatusField = document.getElementById('new_status');
+        if (newStatusField) {
+            newStatusField.addEventListener('change', function() {
+                const reasonWrap = document.getElementById('rejection-reason-wrap');
+                const reasonField = document.getElementById('reject_reason');
+                if (!reasonWrap || !reasonField) return;
+
+                if (newStatusField.value === 'rejected') {
+                    reasonWrap.classList.remove('hidden');
+                    reasonField.required = true;
+                } else {
+                    reasonWrap.classList.add('hidden');
+                    reasonField.required = false;
+                    reasonField.value = '';
+                }
+            });
+        }
 
         if (statusModal) {
             statusModal.addEventListener('click', function(e) {
@@ -2510,6 +2706,51 @@ function nds_quick_enroll_by_email_action() {
 add_action('admin_post_nds_quick_enroll', 'nds_quick_enroll_by_email_action');
 
 /**
+ * Rejection reason options used in status update modals.
+ */
+function nds_get_rejection_reason_options() {
+    return array(
+        'academic_requirements' => 'Academic requirements not met',
+        'incomplete_documents' => 'Incomplete supporting documents',
+        'capacity_full' => 'Program capacity is full',
+        'fee_payment' => 'Application fee/payment issue',
+        'eligibility_criteria' => 'Eligibility criteria not met',
+        'other' => 'Other reason',
+    );
+}
+
+/**
+ * Deletion guard for applications.
+ * Only unlinked, non-progressed applications may be deleted.
+ */
+function nds_can_delete_application($application_id, &$failure_reason = '') {
+    global $wpdb;
+
+    $application = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, status, student_id FROM {$wpdb->prefix}nds_applications WHERE id = %d",
+        $application_id
+    ), ARRAY_A);
+
+    if (empty($application)) {
+        $failure_reason = 'Application does not exist.';
+        return false;
+    }
+
+    if (!empty($application['student_id'])) {
+        $failure_reason = 'Delete blocked: this application is linked to a student record.';
+        return false;
+    }
+
+    $allowed_statuses = array('draft', 'submitted', 'rejected', 'declined', 'withdrawn', 'expired');
+    if (!in_array($application['status'], $allowed_statuses, true)) {
+        $failure_reason = 'Delete blocked: only draft, submitted, rejected, declined, withdrawn, or expired applications can be deleted.';
+        return false;
+    }
+
+    return true;
+}
+
+/**
  * Bulk Update Application Status
  */
 function nds_bulk_update_application_status($application_ids, $new_status) {
@@ -2552,6 +2793,16 @@ function nds_bulk_update_application_status($application_ids, $new_status) {
  */
 function nds_delete_application($application_id) {
     global $wpdb;
+
+    if (!session_id()) {
+        session_start();
+    }
+
+    $failure_reason = '';
+    if (!nds_can_delete_application((int) $application_id, $failure_reason)) {
+        $_SESSION['nds_status_update_error'] = $failure_reason;
+        return false;
+    }
     
     // Start transaction
     $wpdb->query('START TRANSACTION');
@@ -2564,16 +2815,13 @@ function nds_delete_application($application_id) {
         $wpdb->delete($wpdb->prefix . 'nds_application_forms', ['application_id' => $application_id]);
         
         $wpdb->query('COMMIT');
-        
-        add_action('admin_notices', function() {
-            echo '<div class="notice notice-success"><p>Application deleted successfully!</p></div>';
-        });
+        $_SESSION['nds_status_update_success'] = 'Application deleted successfully!';
+        return true;
         
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
-        add_action('admin_notices', function() {
-            echo '<div class="notice notice-error"><p>Failed to delete application!</p></div>';
-        });
+        $_SESSION['nds_status_update_error'] = 'Failed to delete application!';
+        return false;
     }
 }
 
@@ -2582,30 +2830,53 @@ function nds_delete_application($application_id) {
  */
 function nds_bulk_delete_applications($application_ids) {
     global $wpdb;
-    
-    $placeholders = implode(',', array_fill(0, count($application_ids), '%d'));
+
+    if (!session_id()) {
+        session_start();
+    }
+
+    $allowed_ids = array();
+    $blocked_count = 0;
+
+    foreach ($application_ids as $application_id) {
+        $failure_reason = '';
+        if (nds_can_delete_application((int) $application_id, $failure_reason)) {
+            $allowed_ids[] = (int) $application_id;
+        } else {
+            $blocked_count++;
+        }
+    }
+
+    if (empty($allowed_ids)) {
+        $_SESSION['nds_status_update_error'] = 'No selected applications met the delete conditions.';
+        return false;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($allowed_ids), '%d'));
     
     // Start transaction
     $wpdb->query('START TRANSACTION');
     
     try {
         // Delete from applications table
-        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}nds_applications WHERE id IN ($placeholders)", $application_ids));
+        $deleted_apps = $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}nds_applications WHERE id IN ($placeholders)", $allowed_ids));
         
         // Delete from application_forms table
-        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}nds_application_forms WHERE application_id IN ($placeholders)", $application_ids));
+        $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->prefix}nds_application_forms WHERE application_id IN ($placeholders)", $allowed_ids));
         
         $wpdb->query('COMMIT');
-        
-        add_action('admin_notices', function() use ($application_ids) {
-            echo '<div class="notice notice-success"><p>Successfully deleted ' . count($application_ids) . ' application(s)!</p></div>';
-        });
+
+        $message = 'Successfully deleted ' . (int) $deleted_apps . ' application(s).';
+        if ($blocked_count > 0) {
+            $message .= ' ' . (int) $blocked_count . ' application(s) were skipped due to delete conditions.';
+        }
+        $_SESSION['nds_status_update_success'] = $message;
+        return true;
         
     } catch (Exception $e) {
         $wpdb->query('ROLLBACK');
-        add_action('admin_notices', function() {
-            echo '<div class="notice notice-error"><p>Failed to delete applications!</p></div>';
-        });
+        $_SESSION['nds_status_update_error'] = 'Failed to delete applications!';
+        return false;
     }
 }
 

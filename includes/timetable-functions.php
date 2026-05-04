@@ -400,6 +400,66 @@ function nds_get_lecturers() {
 }
 
 /**
+ * Resolve module context for schedule creation.
+ * Returns the linked course and the first assigned lecturer for that course (if any).
+ */
+function nds_get_module_schedule_context($module_id) {
+    global $wpdb;
+
+    $module_id = intval($module_id);
+    if ($module_id <= 0) {
+        return [
+            'success' => false,
+            'message' => 'Please select a valid module.'
+        ];
+    }
+
+    $module_row = $wpdb->get_row($wpdb->prepare(
+        "SELECT m.id AS module_id, m.name AS module_name, c.id AS course_id, c.code AS course_code, c.name AS course_name
+         FROM {$wpdb->prefix}nds_modules m
+         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
+         WHERE m.id = %d
+         LIMIT 1",
+        $module_id
+    ));
+
+    if (!$module_row) {
+        return [
+            'success' => false,
+            'message' => 'Selected module could not be found.'
+        ];
+    }
+
+    $lecturer_row = $wpdb->get_row($wpdb->prepare(
+        "SELECT cl.lecturer_id, s.first_name, s.last_name
+         FROM {$wpdb->prefix}nds_course_lecturers cl
+         INNER JOIN {$wpdb->prefix}nds_staff s ON s.id = cl.lecturer_id
+         WHERE cl.course_id = %d
+         ORDER BY cl.assigned_at ASC, cl.id ASC
+         LIMIT 1",
+        intval($module_row->course_id)
+    ));
+
+    $lecturer_id = 0;
+    $lecturer_name = '';
+    if ($lecturer_row && !empty($lecturer_row->lecturer_id)) {
+        $lecturer_id = intval($lecturer_row->lecturer_id);
+        $lecturer_name = trim(((string) $lecturer_row->first_name) . ' ' . ((string) $lecturer_row->last_name));
+    }
+
+    return [
+        'success' => true,
+        'course_id' => intval($module_row->course_id),
+        'course_name' => (string) $module_row->course_name,
+        'course_code' => (string) $module_row->course_code,
+        'module_id' => intval($module_row->module_id),
+        'module_name' => (string) $module_row->module_name,
+        'lecturer_id' => $lecturer_id,
+        'lecturer_name' => $lecturer_name
+    ];
+}
+
+/**
  * Create a course schedule
  */
 function nds_create_schedule($schedule_data) {
