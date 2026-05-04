@@ -417,7 +417,7 @@ function deleteSchedule(scheduleId) {
 // Program filter
 document.getElementById('program_filter').addEventListener('change', function() {
     if (this.value) {
-        window.location.href = '<?php echo admin_url('admin.php?page=nds-timetable'); ?>&program_id=' + this.value;
+        window.location.href = '<?php echo esc_url_raw(nds_get_timetable_page_url()); ?>&program_id=' + this.value;
     }
 });
 

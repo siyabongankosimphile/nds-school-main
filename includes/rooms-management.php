@@ -9,6 +9,7 @@ if (!defined('ABSPATH')) {
 
 // Handle form submissions via admin_init (fires before any output, ensuring wp_redirect works)
 add_action('admin_init', 'nds_handle_room_form');
+add_action('init', 'nds_handle_room_form');
 function nds_handle_room_form() {
     if (!isset($_POST['nds_room_action'])) {
         return;
@@ -53,16 +54,16 @@ function nds_handle_room_form() {
             $format[] = '%s';
             $result = $wpdb->insert($rooms_table, $data, $format);
             if ($result) {
-                wp_redirect(admin_url('admin.php?page=nds-rooms&success=added'));
+                wp_redirect(nds_get_rooms_page_url(array('success' => 'added')));
             } else {
-                wp_redirect(admin_url('admin.php?page=nds-rooms&error=' . urlencode($wpdb->last_error)));
+                wp_redirect(nds_get_rooms_page_url(array('error' => rawurlencode($wpdb->last_error))));
             }
         } else {
             $result = $wpdb->update($rooms_table, $data, ['id' => $room_id], $format, ['%d']);
             if ($result !== false) {
-                wp_redirect(admin_url('admin.php?page=nds-rooms&success=updated'));
+                wp_redirect(nds_get_rooms_page_url(array('success' => 'updated')));
             } else {
-                wp_redirect(admin_url('admin.php?page=nds-rooms&error=' . urlencode($wpdb->last_error)));
+                wp_redirect(nds_get_rooms_page_url(array('error' => rawurlencode($wpdb->last_error))));
             }
         }
         exit;
@@ -72,9 +73,9 @@ function nds_handle_room_form() {
         if ($room_id) {
             $result = $wpdb->delete($rooms_table, ['id' => $room_id], ['%d']);
             if ($result) {
-                wp_redirect(admin_url('admin.php?page=nds-rooms&success=deleted'));
+                wp_redirect(nds_get_rooms_page_url(array('success' => 'deleted')));
             } else {
-                wp_redirect(admin_url('admin.php?page=nds-rooms&error=' . urlencode($wpdb->last_error)));
+                wp_redirect(nds_get_rooms_page_url(array('error' => rawurlencode($wpdb->last_error))));
             }
             exit;
         }
@@ -174,7 +175,7 @@ function nds_rooms_page() {
                         </div>
                     </div>
                     <div>
-                        <a href="<?php echo admin_url('admin.php?page=nds-rooms&add=1'); ?>" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg flex items-center gap-2 transition-colors duration-200 shadow-sm hover:shadow-md">
+                        <a href="<?php echo esc_url(nds_get_rooms_page_url(array('add' => 1))); ?>" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg flex items-center gap-2 transition-colors duration-200 shadow-sm hover:shadow-md">
                             <i class="fas fa-plus text-sm"></i>
                             Add New Room
                         </a>
@@ -197,7 +198,7 @@ function nds_rooms_page() {
                         <?php echo $edit_id ? 'Edit Room / Venue' : 'Add New Room / Venue'; ?>
                     </h2>
                 </div>
-                <form method="post" action="<?php echo esc_url(admin_url('admin.php?page=nds-rooms')); ?>" class="px-6 py-6">
+                <form method="post" action="<?php echo esc_url(nds_get_rooms_page_url()); ?>" class="px-6 py-6">
                     <?php wp_nonce_field('nds_room_action'); ?>
                     <input type="hidden" name="nds_room_action" value="<?php echo $edit_id ? 'edit' : 'add'; ?>">
                     <?php if ($edit_id): ?>

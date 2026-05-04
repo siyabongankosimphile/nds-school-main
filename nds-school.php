@@ -219,7 +219,21 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
 
     $staff_role = strtolower(trim((string) ($staff_row['role'] ?? '')));
 
-    // Timetable coordinators should never be trapped by login-page or portal redirect targets.
+    // Application administrators should land in their own frontend portal.
+    if (in_array($staff_role, array('administrator', 'application administrator'), true)) {
+        $requested_path = '';
+        if (!empty($requested_redirect_to)) {
+            $requested_path = (string) wp_parse_url($requested_redirect_to, PHP_URL_PATH);
+        }
+
+        if ($requested_path !== '' && strpos($requested_path, '/wp-admin/') === 0) {
+            return $requested_redirect_to;
+        }
+
+        return home_url('/administrator-portal/');
+    }
+
+    // Timetable coordinators should land in their own frontend portal.
     if ($staff_role === 'timetable coordinator') {
         $requested_path = '';
         if (!empty($requested_redirect_to)) {
@@ -230,7 +244,7 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
             return $requested_redirect_to;
         }
 
-        return admin_url('admin.php?page=nds-timetable');
+        return home_url('/timetable-portal/');
     }
 
     // Respect explicit target when present.
@@ -258,7 +272,7 @@ add_filter('login_redirect', function ($redirect_to, $requested_redirect_to, $us
 
 /**
  * Add Student Portal link to frontend navigation for all visitors,
- * and keep Staff Portal visible for lecturer accounts.
+ * and keep role-based portal links visible for mapped staff accounts.
  */
 add_filter('wp_nav_menu_items', function ($items, $args) {
     if (is_admin()) {
@@ -295,7 +309,35 @@ add_filter('wp_nav_menu_items', function ($items, $args) {
         ), ARRAY_A);
     }
 
-    if (empty($staff_row) || !isset($staff_row['role']) || strtolower(trim((string) $staff_row['role'])) !== 'lecturer') {
+    if (empty($staff_row) || !isset($staff_row['role'])) {
+        return $items;
+    }
+
+    $staff_role = strtolower(trim((string) $staff_row['role']));
+
+    if (in_array($staff_role, array('administrator', 'application administrator'), true)) {
+        $administrator_portal_url = esc_url(home_url('/administrator-portal/'));
+        $administrator_label = esc_html__('Administrator Portal', 'nds-school');
+
+        if (strpos($items, $administrator_portal_url) === false && stripos($items, 'administrator-portal') === false) {
+            $items .= '<li class="menu-item menu-item-nds-administrator-portal"><a href="' . $administrator_portal_url . '">' . $administrator_label . '</a></li>';
+        }
+
+        return $items;
+    }
+
+    if ($staff_role === 'timetable coordinator') {
+        $coordinator_portal_url = esc_url(home_url('/timetable-portal/'));
+        $coordinator_label = esc_html__('Timetable Portal', 'nds-school');
+
+        if (strpos($items, $coordinator_portal_url) === false && stripos($items, 'timetable-portal') === false) {
+            $items .= '<li class="menu-item menu-item-nds-timetable-portal"><a href="' . $coordinator_portal_url . '">' . $coordinator_label . '</a></li>';
+        }
+
+        return $items;
+    }
+
+    if ($staff_role !== 'lecturer') {
         return $items;
     }
 
@@ -2173,6 +2215,9 @@ function nds_school_deactivate()
     
     // Clear any cached data
     delete_option('nds_portal_rules_flushed');
+    delete_option('nds_staff_portal_rules_flushed');
+    delete_option('nds_timetable_portal_rules_flushed');
+    delete_option('nds_admin_portal_rules_flushed');
     flush_rewrite_rules();
 }
 
@@ -2230,6 +2275,10 @@ add_filter('query_vars', function ($vars) {
     $vars[] = 'nds_portal';
     // Staff portal query var for /staff-portal/
     $vars[] = 'nds_staff_portal';
+    // Application administrator portal query var for /administrator-portal/
+    $vars[] = 'nds_admin_portal';
+    // Timetable coordinator portal query var for /timetable-portal/
+    $vars[] = 'nds_timetable_portal';
     // Calendar query var for /calendar/
     $vars[] = 'nds_calendar';
     return $vars;
@@ -2317,6 +2366,10 @@ add_action('init', function () {
     add_rewrite_rule('^portal/?$', 'index.php?nds_portal=1', 'top');
     // Staff portal route
     add_rewrite_rule('^staff-portal/?$', 'index.php?nds_staff_portal=1', 'top');
+    // Application administrator portal route
+    add_rewrite_rule('^administrator-portal/?$', 'index.php?nds_admin_portal=1', 'top');
+    // Timetable coordinator portal route
+    add_rewrite_rule('^timetable-portal/?$', 'index.php?nds_timetable_portal=1', 'top');
 });
 
 add_action('template_redirect', function () {
@@ -2352,6 +2405,15 @@ add_action('template_redirect', function () {
                     $staff_id
                 ));
                 if ($role !== '') {
+                    $normalized_role = strtolower(trim($role));
+                    if (in_array($normalized_role, array('administrator', 'application administrator'), true)) {
+                        wp_safe_redirect(home_url('/administrator-portal/'));
+                        exit;
+                    }
+                    if ($normalized_role === 'timetable coordinator') {
+                        wp_safe_redirect(home_url('/timetable-portal/'));
+                        exit;
+                    }
                     wp_safe_redirect(home_url('/staff-portal/?tab=overview'));
                     exit;
                 }
@@ -2425,7 +2487,12 @@ add_action('template_redirect', function () {
     ));
 
     if (strtolower(trim($staff_role)) === 'timetable coordinator') {
-        wp_safe_redirect(admin_url('admin.php?page=nds-timetable'));
+        wp_safe_redirect(home_url('/timetable-portal/'));
+        exit;
+    }
+
+    if (in_array(strtolower(trim($staff_role)), array('administrator', 'application administrator'), true)) {
+        wp_safe_redirect(home_url('/administrator-portal/'));
         exit;
     }
 
@@ -2440,14 +2507,107 @@ add_filter('redirect_canonical', function ($redirect_url, $requested_url) {
         return false;
     }
 
+    if ((int) get_query_var('nds_timetable_portal') === 1) {
+        return false;
+    }
+
+    if ((int) get_query_var('nds_admin_portal') === 1) {
+        return false;
+    }
+
     $request_path = wp_parse_url($requested_url, PHP_URL_PATH);
     $staff_path = wp_parse_url(home_url('/staff-portal/'), PHP_URL_PATH);
     if (!empty($request_path) && !empty($staff_path) && strpos($request_path, $staff_path) === 0) {
         return false;
     }
 
+    $timetable_path = wp_parse_url(home_url('/timetable-portal/'), PHP_URL_PATH);
+    if (!empty($request_path) && !empty($timetable_path) && strpos($request_path, $timetable_path) === 0) {
+        return false;
+    }
+
+    $administrator_path = wp_parse_url(home_url('/administrator-portal/'), PHP_URL_PATH);
+    if (!empty($request_path) && !empty($administrator_path) && strpos($request_path, $administrator_path) === 0) {
+        return false;
+    }
+
     return $redirect_url;
 }, 10, 2);
+
+// Application Administrator Portal Route Handler
+add_action('template_redirect', function () {
+    $is_admin_portal = (int) get_query_var('nds_admin_portal');
+    if ($is_admin_portal !== 1) {
+        return;
+    }
+
+    if (!is_user_logged_in()) {
+        wp_safe_redirect(wp_login_url(home_url('/administrator-portal/')));
+        exit;
+    }
+
+    if (!function_exists('nds_portal_get_current_staff_id')) {
+        wp_die(__('Administrator portal is not available right now.', 'nds-school'));
+    }
+
+    $staff_id = (int) nds_portal_get_current_staff_id();
+    if ($staff_id <= 0) {
+        wp_die(__('No staff profile found for your account. Please contact the administrator.', 'nds-school'));
+    }
+
+    global $wpdb;
+    $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+        "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+        $staff_id
+    ));
+
+    $normalized_role = strtolower(trim($staff_role));
+    $is_application_admin = in_array($normalized_role, array('administrator', 'application administrator'), true);
+    if (!$is_application_admin && !current_user_can('manage_options')) {
+        wp_safe_redirect(home_url('/staff-portal/?tab=overview'));
+        exit;
+    }
+
+    include plugin_dir_path(__FILE__) . 'templates/administrator-portal.php';
+    exit;
+});
+
+// Timetable Coordinator Portal Route Handler
+add_action('template_redirect', function () {
+    $is_timetable_portal = (int) get_query_var('nds_timetable_portal');
+    if ($is_timetable_portal !== 1) {
+        return;
+    }
+
+    if (!is_user_logged_in()) {
+        wp_safe_redirect(wp_login_url(home_url('/timetable-portal/')));
+        exit;
+    }
+
+    if (!function_exists('nds_portal_get_current_staff_id')) {
+        wp_die(__('Timetable portal is not available right now.', 'nds-school'));
+    }
+
+    $staff_id = (int) nds_portal_get_current_staff_id();
+    if ($staff_id <= 0) {
+        wp_die(__('No staff profile found for your account. Please contact the administrator.', 'nds-school'));
+    }
+
+    global $wpdb;
+    $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+        "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+        $staff_id
+    ));
+
+    $is_timetable_coordinator = strtolower(trim($staff_role)) === 'timetable coordinator';
+    if (!$is_timetable_coordinator && !current_user_can('manage_options')) {
+        wp_safe_redirect(home_url('/staff-portal/?tab=overview'));
+        exit;
+    }
+
+    include plugin_dir_path(__FILE__) . 'templates/timetable-coordinator-portal.php';
+    exit;
+});
 
 // Enqueue learner dashboard assets only on /portal/
 add_action('wp_enqueue_scripts', function () {
@@ -2627,6 +2787,135 @@ add_action('wp_enqueue_scripts', function () {
     }
 });
 
+// Enqueue timetable coordinator portal assets only on /timetable-portal/
+add_action('wp_enqueue_scripts', function () {
+    $is_timetable_portal = (int) get_query_var('nds_timetable_portal');
+    if ($is_timetable_portal !== 1) {
+        return;
+    }
+
+    $frontend_css = plugin_dir_path(__FILE__) . 'assets/css/frontend.css';
+    if (file_exists($frontend_css)) {
+        wp_enqueue_style(
+            'nds-timetable-portal-frontend',
+            plugin_dir_url(__FILE__) . 'assets/css/frontend.css',
+            array(),
+            filemtime($frontend_css),
+            'all'
+        );
+    }
+
+    $styles_css = plugin_dir_path(__FILE__) . 'assets/css/styles.css';
+    if (file_exists($styles_css)) {
+        wp_enqueue_style(
+            'nds-timetable-portal-styles',
+            plugin_dir_url(__FILE__) . 'assets/css/styles.css',
+            array('nds-timetable-portal-frontend'),
+            filemtime($styles_css),
+            'all'
+        );
+    }
+
+    $layout_css = plugin_dir_path(__FILE__) . 'assets/css/student-portal-layout.css';
+    if (file_exists($layout_css)) {
+        wp_enqueue_style(
+            'nds-timetable-portal-layout',
+            plugin_dir_url(__FILE__) . 'assets/css/student-portal-layout.css',
+            array('nds-timetable-portal-frontend', 'nds-timetable-portal-styles'),
+            filemtime($layout_css),
+            'all'
+        );
+    }
+
+    wp_enqueue_style(
+        'nds-timetable-portal-icons',
+        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css',
+        array(),
+        null,
+        'all'
+    );
+
+    wp_enqueue_style(
+        'fullcalendar-css',
+        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css',
+        array(),
+        '6.1.10'
+    );
+
+    wp_enqueue_script(
+        'fullcalendar-js',
+        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js',
+        array('jquery'),
+        '6.1.10',
+        true
+    );
+
+    $calendar_js_path = plugin_dir_path(__FILE__) . 'assets/js/admin-calendar.js';
+    if (file_exists($calendar_js_path)) {
+        wp_enqueue_script(
+            'nds-timetable-portal-calendar',
+            plugin_dir_url(__FILE__) . 'assets/js/admin-calendar.js',
+            array('jquery', 'fullcalendar-js'),
+            filemtime($calendar_js_path),
+            true
+        );
+
+        wp_localize_script('nds-timetable-portal-calendar', 'ndsFrontendCalendar', array(
+            'ajaxurl' => admin_url('admin-ajax.php'),
+            'nonce' => wp_create_nonce('nds_public_calendar_nonce')
+        ));
+    }
+});
+
+// Enqueue administrator portal assets only on /administrator-portal/
+add_action('wp_enqueue_scripts', function () {
+    $is_admin_portal = (int) get_query_var('nds_admin_portal');
+    if ($is_admin_portal !== 1) {
+        return;
+    }
+
+    $frontend_css = plugin_dir_path(__FILE__) . 'assets/css/frontend.css';
+    if (file_exists($frontend_css)) {
+        wp_enqueue_style(
+            'nds-administrator-portal-frontend',
+            plugin_dir_url(__FILE__) . 'assets/css/frontend.css',
+            array(),
+            filemtime($frontend_css),
+            'all'
+        );
+    }
+
+    $styles_css = plugin_dir_path(__FILE__) . 'assets/css/styles.css';
+    if (file_exists($styles_css)) {
+        wp_enqueue_style(
+            'nds-administrator-portal-styles',
+            plugin_dir_url(__FILE__) . 'assets/css/styles.css',
+            array('nds-administrator-portal-frontend'),
+            filemtime($styles_css),
+            'all'
+        );
+    }
+
+    $layout_css = plugin_dir_path(__FILE__) . 'assets/css/student-portal-layout.css';
+    if (file_exists($layout_css)) {
+        wp_enqueue_style(
+            'nds-administrator-portal-layout',
+            plugin_dir_url(__FILE__) . 'assets/css/student-portal-layout.css',
+            array('nds-administrator-portal-frontend', 'nds-administrator-portal-styles'),
+            filemtime($layout_css),
+            'all'
+        );
+    }
+
+    wp_enqueue_style(
+        'nds-administrator-portal-icons',
+        'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css',
+        array(),
+        null,
+        'all'
+    );
+});
+
 // One-time rewrite flush to activate /portal/ and /staff-portal/ without manual permalinks save
 add_action('init', function () {
     if (!get_option('nds_portal_rules_flushed')) {
@@ -2642,6 +2931,22 @@ add_action('init', function () {
         update_option('nds_staff_portal_rules_flushed', 1);
     }
 }, 100);
+
+// Force flush rewrite rules on next page load (one-time for timetable coordinator portal)
+add_action('init', function () {
+    if (!get_option('nds_timetable_portal_rules_flushed')) {
+        flush_rewrite_rules(false);
+        update_option('nds_timetable_portal_rules_flushed', 1);
+    }
+}, 101);
+
+// Force flush rewrite rules on next page load (one-time for application administrator portal)
+add_action('init', function () {
+    if (!get_option('nds_admin_portal_rules_flushed')) {
+        flush_rewrite_rules(false);
+        update_option('nds_admin_portal_rules_flushed', 1);
+    }
+}, 102);
 
 // -----------------------------
 // Student Portal helpers & AJAX
@@ -2923,6 +3228,372 @@ function nds_portal_handle_staff_profile_update() {
     exit;
 }
 add_action('admin_post_nds_portal_update_staff_profile', 'nds_portal_handle_staff_profile_update');
+
+function nds_portal_handle_timetable_profile_update() {
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    if (!isset($_POST['nds_staff_profile_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_staff_profile_nonce'])), 'nds_staff_profile_action')) {
+        wp_die('Security check failed.');
+    }
+
+    $staff_id = function_exists('nds_portal_get_current_staff_id') ? (int) nds_portal_get_current_staff_id() : 0;
+    $user = wp_get_current_user();
+    if ($staff_id <= 0 || !$user || !$user->exists()) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/timetable-portal/', 'profile', array('profile_error' => rawurlencode('Staff profile not found.'))));
+        exit;
+    }
+
+    global $wpdb;
+    $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+        "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+        $staff_id
+    ));
+
+    $is_timetable_coordinator = strtolower(trim($staff_role)) === 'timetable coordinator';
+    if (!$is_timetable_coordinator && !current_user_can('manage_options')) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'profile', array('profile_error' => rawurlencode('You do not have permission to update this profile.'))));
+        exit;
+    }
+
+    $staff_table = $wpdb->prefix . 'nds_staff';
+
+    $profile_data = array(
+        'first_name' => isset($_POST['first_name']) ? sanitize_text_field(wp_unslash($_POST['first_name'])) : '',
+        'last_name' => isset($_POST['last_name']) ? sanitize_text_field(wp_unslash($_POST['last_name'])) : '',
+        'email' => isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '',
+        'phone' => isset($_POST['phone']) ? sanitize_text_field(wp_unslash($_POST['phone'])) : '',
+        'address' => isset($_POST['address']) ? sanitize_textarea_field(wp_unslash($_POST['address'])) : '',
+        'dob' => isset($_POST['dob']) ? sanitize_text_field(wp_unslash($_POST['dob'])) : '',
+        'gender' => isset($_POST['gender']) ? sanitize_text_field(wp_unslash($_POST['gender'])) : '',
+        'profile_picture' => isset($_POST['profile_picture']) ? esc_url_raw(wp_unslash($_POST['profile_picture'])) : '',
+        'current_password' => isset($_POST['current_password']) ? (string) wp_unslash($_POST['current_password']) : '',
+        'new_password' => isset($_POST['new_password']) ? (string) wp_unslash($_POST['new_password']) : '',
+        'confirm_password' => isset($_POST['confirm_password']) ? (string) wp_unslash($_POST['confirm_password']) : '',
+    );
+
+    if ($profile_data['first_name'] === '' || $profile_data['last_name'] === '' || $profile_data['email'] === '') {
+        wp_safe_redirect(nds_portal_build_redirect_url('/timetable-portal/', 'profile', array('profile_error' => rawurlencode('First name, last name, and email are required.'))));
+        exit;
+    }
+
+    $user_sync = nds_portal_sync_wp_user_profile($user, $profile_data);
+    if (is_wp_error($user_sync)) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/timetable-portal/', 'profile', array('profile_error' => rawurlencode($user_sync->get_error_message()))));
+        exit;
+    }
+
+    $staff_update = array(
+        'first_name' => $profile_data['first_name'],
+        'last_name' => $profile_data['last_name'],
+        'email' => $user_sync['email'],
+        'phone' => $profile_data['phone'],
+        'address' => $profile_data['address'],
+        'dob' => $profile_data['dob'] ?: null,
+        'gender' => $profile_data['gender'],
+        'profile_picture' => $profile_data['profile_picture'],
+    );
+
+    $wpdb->update($staff_table, $staff_update, array('id' => $staff_id));
+
+    $notice = !empty($user_sync['password_updated'])
+        ? 'Profile updated and password changed successfully.'
+        : 'Profile updated successfully.';
+    wp_safe_redirect(nds_portal_build_redirect_url('/timetable-portal/', 'profile', array('profile_notice' => rawurlencode($notice))));
+    exit;
+}
+add_action('admin_post_nds_portal_update_timetable_profile', 'nds_portal_handle_timetable_profile_update');
+
+function nds_portal_handle_administrator_profile_update() {
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    if (!isset($_POST['nds_staff_profile_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_staff_profile_nonce'])), 'nds_staff_profile_action')) {
+        wp_die('Security check failed.');
+    }
+
+    $staff_id = function_exists('nds_portal_get_current_staff_id') ? (int) nds_portal_get_current_staff_id() : 0;
+    $user = wp_get_current_user();
+    if ($staff_id <= 0 || !$user || !$user->exists()) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'profile', array('profile_error' => rawurlencode('Staff profile not found.'))));
+        exit;
+    }
+
+    global $wpdb;
+    $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+        "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+        $staff_id
+    ));
+
+    $normalized_role = strtolower(trim($staff_role));
+    $is_application_admin = in_array($normalized_role, array('administrator', 'application administrator'), true);
+    if (!$is_application_admin && !current_user_can('manage_options')) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'profile', array('profile_error' => rawurlencode('You do not have permission to update this profile.'))));
+        exit;
+    }
+
+    $staff_table = $wpdb->prefix . 'nds_staff';
+
+    $profile_data = array(
+        'first_name' => isset($_POST['first_name']) ? sanitize_text_field(wp_unslash($_POST['first_name'])) : '',
+        'last_name' => isset($_POST['last_name']) ? sanitize_text_field(wp_unslash($_POST['last_name'])) : '',
+        'email' => isset($_POST['email']) ? sanitize_email(wp_unslash($_POST['email'])) : '',
+        'phone' => isset($_POST['phone']) ? sanitize_text_field(wp_unslash($_POST['phone'])) : '',
+        'address' => isset($_POST['address']) ? sanitize_textarea_field(wp_unslash($_POST['address'])) : '',
+        'dob' => isset($_POST['dob']) ? sanitize_text_field(wp_unslash($_POST['dob'])) : '',
+        'gender' => isset($_POST['gender']) ? sanitize_text_field(wp_unslash($_POST['gender'])) : '',
+        'profile_picture' => isset($_POST['profile_picture']) ? esc_url_raw(wp_unslash($_POST['profile_picture'])) : '',
+        'current_password' => isset($_POST['current_password']) ? (string) wp_unslash($_POST['current_password']) : '',
+        'new_password' => isset($_POST['new_password']) ? (string) wp_unslash($_POST['new_password']) : '',
+        'confirm_password' => isset($_POST['confirm_password']) ? (string) wp_unslash($_POST['confirm_password']) : '',
+    );
+
+    if ($profile_data['first_name'] === '' || $profile_data['last_name'] === '' || $profile_data['email'] === '') {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'profile', array('profile_error' => rawurlencode('First name, last name, and email are required.'))));
+        exit;
+    }
+
+    $user_sync = nds_portal_sync_wp_user_profile($user, $profile_data);
+    if (is_wp_error($user_sync)) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'profile', array('profile_error' => rawurlencode($user_sync->get_error_message()))));
+        exit;
+    }
+
+    $staff_update = array(
+        'first_name' => $profile_data['first_name'],
+        'last_name' => $profile_data['last_name'],
+        'email' => $user_sync['email'],
+        'phone' => $profile_data['phone'],
+        'address' => $profile_data['address'],
+        'dob' => $profile_data['dob'] ?: null,
+        'gender' => $profile_data['gender'],
+        'profile_picture' => $profile_data['profile_picture'],
+    );
+
+    $wpdb->update($staff_table, $staff_update, array('id' => $staff_id));
+
+    $notice = !empty($user_sync['password_updated'])
+        ? 'Profile updated and password changed successfully.'
+        : 'Profile updated successfully.';
+    wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'profile', array('profile_notice' => rawurlencode($notice))));
+    exit;
+}
+add_action('admin_post_nds_portal_update_administrator_profile', 'nds_portal_handle_administrator_profile_update');
+
+function nds_portal_handle_admin_application_status_update() {
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    if (!isset($_POST['nds_admin_application_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_admin_application_nonce'])), 'nds_admin_application_action')) {
+        wp_die('Security check failed.');
+    }
+
+    $staff_id = function_exists('nds_portal_get_current_staff_id') ? (int) nds_portal_get_current_staff_id() : 0;
+    if ($staff_id <= 0 && !current_user_can('manage_options')) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Staff profile not found.'))));
+        exit;
+    }
+
+    global $wpdb;
+    if ($staff_id > 0) {
+        $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+            $staff_id
+        ));
+        $normalized_role = strtolower(trim($staff_role));
+        $is_application_admin = in_array($normalized_role, array('administrator', 'application administrator'), true);
+        if (!$is_application_admin && !current_user_can('manage_options')) {
+            wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'overview', array('app_error' => rawurlencode('You do not have permission to manage applications.'))));
+            exit;
+        }
+    }
+
+    $application_id = isset($_POST['application_id']) ? (int) $_POST['application_id'] : 0;
+    $new_status = isset($_POST['new_status']) ? sanitize_text_field(wp_unslash($_POST['new_status'])) : '';
+    $notes = isset($_POST['notes']) ? sanitize_textarea_field(wp_unslash($_POST['notes'])) : '';
+    $notify_applicant = !empty($_POST['notify_applicant']);
+
+    $allowed_statuses = array(
+        'submitted',
+        'under_review',
+        'waitlisted',
+        'conditional_offer',
+        'offer_made',
+        'accepted',
+        'declined',
+        'withdrawn',
+        'rejected',
+        'expired'
+    );
+
+    if ($application_id <= 0 || !in_array($new_status, $allowed_statuses, true)) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Invalid application or status.'))));
+        exit;
+    }
+
+    $result = false;
+    if (function_exists('nds_update_application_status')) {
+        if (!session_id()) {
+            @session_start();
+        }
+        $result = nds_update_application_status($application_id, $new_status, $notes, $notify_applicant);
+    } else {
+        $result = $wpdb->update(
+            $wpdb->prefix . 'nds_applications',
+            array(
+                'status' => $new_status,
+                'notes' => $notes,
+                'updated_at' => current_time('mysql')
+            ),
+            array('id' => $application_id),
+            array('%s', '%s', '%s'),
+            array('%d')
+        );
+        $result = ($result !== false);
+    }
+
+    if ($result) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_notice' => rawurlencode('Application status updated successfully.'))));
+        exit;
+    }
+
+    wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Failed to update application status.'))));
+    exit;
+}
+add_action('admin_post_nds_portal_admin_update_application_status', 'nds_portal_handle_admin_application_status_update');
+
+function nds_portal_handle_admin_bulk_application_action() {
+    if (!is_user_logged_in()) {
+        wp_die('Unauthorized');
+    }
+
+    if (!isset($_POST['nds_admin_bulk_nonce']) || !wp_verify_nonce(sanitize_text_field(wp_unslash($_POST['nds_admin_bulk_nonce'])), 'nds_admin_bulk_action')) {
+        wp_die('Security check failed.');
+    }
+
+    $staff_id = function_exists('nds_portal_get_current_staff_id') ? (int) nds_portal_get_current_staff_id() : 0;
+    if ($staff_id <= 0 && !current_user_can('manage_options')) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Staff profile not found.'))));
+        exit;
+    }
+
+    global $wpdb;
+    if ($staff_id > 0) {
+        $staff_role = (string) $wpdb->get_var($wpdb->prepare(
+            "SELECT role FROM {$wpdb->prefix}nds_staff WHERE id = %d LIMIT 1",
+            $staff_id
+        ));
+        $normalized_role = strtolower(trim($staff_role));
+        $is_application_admin = in_array($normalized_role, array('administrator', 'application administrator'), true);
+        if (!$is_application_admin && !current_user_can('manage_options')) {
+            wp_safe_redirect(nds_portal_build_redirect_url('/staff-portal/', 'overview', array('app_error' => rawurlencode('You do not have permission to manage applications.'))));
+            exit;
+        }
+    }
+
+    $bulk_action = isset($_POST['bulk_action']) ? sanitize_text_field(wp_unslash($_POST['bulk_action'])) : '';
+    $selected_ids = isset($_POST['application_ids']) ? (array) $_POST['application_ids'] : array();
+    $application_ids = array_values(array_filter(array_map('intval', $selected_ids), function ($id) {
+        return $id > 0;
+    }));
+
+    if (empty($application_ids)) {
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Select at least one application.'))));
+        exit;
+    }
+
+    if ($bulk_action === 'update_status') {
+        $new_status = isset($_POST['new_status']) ? sanitize_text_field(wp_unslash($_POST['new_status'])) : '';
+        $allowed_statuses = array(
+            'submitted',
+            'under_review',
+            'waitlisted',
+            'conditional_offer',
+            'offer_made',
+            'accepted',
+            'declined',
+            'withdrawn',
+            'rejected',
+            'expired'
+        );
+
+        if (!in_array($new_status, $allowed_statuses, true)) {
+            wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Select a valid status for bulk update.'))));
+            exit;
+        }
+
+        $updated = 0;
+        if (function_exists('nds_bulk_update_application_status')) {
+            if (!session_id()) {
+                @session_start();
+            }
+            $ok = nds_bulk_update_application_status($application_ids, $new_status);
+            if ($ok) {
+                $updated = count($application_ids);
+            }
+        } else {
+            foreach ($application_ids as $application_id) {
+                $result = $wpdb->update(
+                    $wpdb->prefix . 'nds_applications',
+                    array(
+                        'status' => $new_status,
+                        'updated_at' => current_time('mysql')
+                    ),
+                    array('id' => $application_id),
+                    array('%s', '%s'),
+                    array('%d')
+                );
+                if ($result !== false) {
+                    $updated++;
+                }
+            }
+        }
+
+        if ($updated > 0) {
+            wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_notice' => rawurlencode('Updated ' . $updated . ' application(s).'))));
+            exit;
+        }
+
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Bulk status update failed.'))));
+        exit;
+    }
+
+    if ($bulk_action === 'delete') {
+        $deleted = 0;
+        if (function_exists('nds_bulk_delete_applications')) {
+            if (!session_id()) {
+                @session_start();
+            }
+            $ok = nds_bulk_delete_applications($application_ids);
+            if ($ok) {
+                $deleted = count($application_ids);
+            }
+        } else {
+            foreach ($application_ids as $application_id) {
+                $wpdb->delete($wpdb->prefix . 'nds_application_forms', array('application_id' => $application_id), array('%d'));
+                $result = $wpdb->delete($wpdb->prefix . 'nds_applications', array('id' => $application_id), array('%d'));
+                if ($result !== false) {
+                    $deleted++;
+                }
+            }
+        }
+
+        if ($deleted > 0) {
+            wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_notice' => rawurlencode('Deleted ' . $deleted . ' application(s).'))));
+            exit;
+        }
+
+        wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Bulk delete failed.'))));
+        exit;
+    }
+
+    wp_safe_redirect(nds_portal_build_redirect_url('/administrator-portal/', 'applications', array('app_error' => rawurlencode('Choose a valid bulk action.'))));
+    exit;
+}
+add_action('admin_post_nds_portal_admin_bulk_application_action', 'nds_portal_handle_admin_bulk_application_action');
 
 /**
  * Public AJAX: register a basic WordPress user for applicants

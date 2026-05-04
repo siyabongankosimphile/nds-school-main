@@ -55,6 +55,62 @@ function nds_can_manage_timetables() {
 }
 
 /**
+ * Determine whether current request is for the frontend timetable coordinator portal.
+ */
+function nds_is_frontend_timetable_portal_request() {
+    if ((int) get_query_var('nds_timetable_portal') === 1) {
+        return true;
+    }
+
+    if (is_admin()) {
+        return false;
+    }
+
+    $request_uri = isset($_SERVER['REQUEST_URI']) ? (string) $_SERVER['REQUEST_URI'] : '';
+    $request_path = $request_uri !== '' ? (string) wp_parse_url($request_uri, PHP_URL_PATH) : '';
+    $portal_path = (string) wp_parse_url(home_url('/timetable-portal/'), PHP_URL_PATH);
+
+    if ($request_path === '' || $portal_path === '') {
+        return false;
+    }
+
+    return strpos(untrailingslashit($request_path), untrailingslashit($portal_path)) === 0;
+}
+
+/**
+ * Resolve timetable page URL for current context.
+ * Uses frontend timetable portal when active, otherwise defaults to wp-admin page.
+ */
+function nds_get_timetable_page_url($query_args = array()) {
+    $base_url = nds_is_frontend_timetable_portal_request()
+        ? home_url('/timetable-portal/')
+        : admin_url('admin.php?page=nds-timetable');
+
+    if (empty($query_args)) {
+        return $base_url;
+    }
+
+    return add_query_arg($query_args, $base_url);
+}
+
+/**
+ * Resolve rooms page URL for current context.
+ * Uses frontend timetable portal rooms tab when active.
+ */
+function nds_get_rooms_page_url($query_args = array()) {
+    $base_args = array('tab' => 'rooms');
+    $base_url = nds_is_frontend_timetable_portal_request()
+        ? add_query_arg($base_args, home_url('/timetable-portal/'))
+        : admin_url('admin.php?page=nds-rooms');
+
+    if (empty($query_args)) {
+        return $base_url;
+    }
+
+    return add_query_arg($query_args, $base_url);
+}
+
+/**
  * Get all rooms/venues
  */
 function nds_get_rooms($status = 'active') {
