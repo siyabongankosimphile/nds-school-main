@@ -9,8 +9,18 @@ if (!defined('ABSPATH')) {
  * Handle Application Form Submission
  */
 function nds_handle_application_form_submission() {
-    // Verify nonce
-    if (!isset($_POST['nds_application_nonce']) || !wp_verify_nonce($_POST['nds_application_nonce'], 'nds_application_form')) {
+    // Verify nonce (accept both traditional form nonce and AJAX nonce field)
+    $submission_nonce = '';
+    if (isset($_POST['nds_application_nonce'])) {
+        $submission_nonce = sanitize_text_field(wp_unslash($_POST['nds_application_nonce']));
+    } elseif (isset($_POST['nonce'])) {
+        $submission_nonce = sanitize_text_field(wp_unslash($_POST['nonce']));
+    }
+
+    if ($submission_nonce === '' || !wp_verify_nonce($submission_nonce, 'nds_application_form')) {
+        if (defined('DOING_AJAX') && DOING_AJAX) {
+            wp_send_json_error(array('message' => 'Security check failed. Please refresh the page and try again.'));
+        }
         wp_die('Security check failed');
     }
 
@@ -272,7 +282,9 @@ function nds_handle_application_form_submission() {
         'gender' => sanitize_text_field($_POST['gender']),
         // Clip nationality to DB column size (VARCHAR(100)) to avoid strict-mode errors
         'nationality' => isset($_POST['nationality'])
-            ? mb_substr(sanitize_text_field($_POST['nationality']), 0, 100)
+            ? (function_exists('mb_substr')
+                ? mb_substr(sanitize_text_field($_POST['nationality']), 0, 100)
+                : substr(sanitize_text_field($_POST['nationality']), 0, 100))
             : '',
         'country_of_birth' => sanitize_text_field($_POST['country_of_birth']),
         'marital_status' => sanitize_text_field($_POST['marital_status']),

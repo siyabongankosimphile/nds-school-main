@@ -91,12 +91,25 @@ $app_notice = isset($_GET['app_notice']) ? sanitize_text_field(wp_unslash($_GET[
 $app_error = isset($_GET['app_error']) ? sanitize_text_field(wp_unslash($_GET['app_error'])) : '';
 
 $active_applications = $wpdb->get_results(
-    "SELECT a.id, a.application_no, a.status, a.submitted_at, a.created_at, af.full_name, af.email, af.course_name
+    "SELECT a.id, a.application_no, a.status, a.submitted_at, a.created_at, a.decision_at, a.decided_by,
+            af.full_name, af.email, af.course_name,
+            u.display_name AS decided_by_name
      FROM {$wpdb->prefix}nds_applications a
      LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id
+     LEFT JOIN {$wpdb->users} u ON u.ID = a.decided_by
      WHERE a.status != 'converted_to_student'
      GROUP BY a.id
      ORDER BY COALESCE(a.submitted_at, a.created_at) DESC",
+    ARRAY_A
+);
+
+$latest_status_audit = $wpdb->get_row(
+    "SELECT a.id, a.application_no, a.status, a.decision_at, a.updated_at, u.display_name AS decided_by_name
+     FROM {$wpdb->prefix}nds_applications a
+     LEFT JOIN {$wpdb->users} u ON u.ID = a.decided_by
+     WHERE a.status != 'converted_to_student'
+     ORDER BY COALESCE(a.decision_at, a.updated_at, a.created_at) DESC
+     LIMIT 1",
     ARRAY_A
 );
 
@@ -241,6 +254,20 @@ $status_labels = array(
                         </div>
                     </div>
                 <?php elseif ($current_tab === 'applications') : ?>
+                    <div class="mb-4 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900">
+                        <div class="font-semibold mb-1">Status Audit</div>
+                        <?php if (!empty($latest_status_audit)) : ?>
+                            <div>
+                                Latest change: <?php echo esc_html($status_labels[(string) ($latest_status_audit['status'] ?? '')] ?? ucwords(str_replace('_', ' ', (string) ($latest_status_audit['status'] ?? 'unknown')))); ?>
+                                on application <?php echo esc_html((string) ($latest_status_audit['application_no'] ?: ('APP-' . (int) $latest_status_audit['id']))); ?>
+                                by <?php echo esc_html((string) ($latest_status_audit['decided_by_name'] ?: 'System')); ?>
+                                at <?php echo esc_html(!empty($latest_status_audit['decision_at']) ? date_i18n('Y-m-d H:i', strtotime((string) $latest_status_audit['decision_at'])) : (!empty($latest_status_audit['updated_at']) ? date_i18n('Y-m-d H:i', strtotime((string) $latest_status_audit['updated_at'])) : 'N/A')); ?>.
+                            </div>
+                        <?php else : ?>
+                            <div>No status changes recorded yet.</div>
+                        <?php endif; ?>
+                    </div>
+
                     <?php if ($app_notice !== '') : ?>
                         <div class="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 mb-4"><?php echo esc_html($app_notice); ?></div>
                     <?php endif; ?>
@@ -326,7 +353,20 @@ $status_labels = array(
                                             </td>
                                             <td class="px-4 py-3 text-sm text-gray-700"><?php echo esc_html($application_row['course_name'] ?: 'Not set'); ?></td>
                                             <td class="px-4 py-3 text-sm text-gray-700"><?php echo esc_html($row_date !== '' ? date_i18n('Y-m-d H:i', strtotime($row_date)) : '-'); ?></td>
-                                            <td class="px-4 py-3 text-sm"><span class="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-700"><?php echo esc_html($status_labels[$row_status] ?? ucwords(str_replace('_', ' ', $row_status))); ?></span></td>
+                                            <td class="px-4 py-3 text-sm">
+                                                <span class="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-700"><?php echo esc_html($status_labels[$row_status] ?? ucwords(str_replace('_', ' ', $row_status))); ?></span>
+                                                <div class="mt-1 text-[11px] text-gray-500">
+                                                    <?php
+                                                    $row_decider = (string) ($application_row['decided_by_name'] ?? '');
+                                                    $row_decision_at = (string) ($application_row['decision_at'] ?? '');
+                                                    if ($row_decider !== '' || $row_decision_at !== '') {
+                                                        echo esc_html('By ' . ($row_decider !== '' ? $row_decider : 'System') . ' at ' . ($row_decision_at !== '' ? date_i18n('Y-m-d H:i', strtotime($row_decision_at)) : 'N/A'));
+                                                    } else {
+                                                        echo esc_html('Awaiting first review action');
+                                                    }
+                                                    ?>
+                                                </div>
+                                            </td>
                                             <td class="px-4 py-3 text-sm text-gray-700">
                                                 <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="space-y-2">
                                                     <input type="hidden" name="action" value="nds_portal_admin_update_application_status">

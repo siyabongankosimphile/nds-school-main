@@ -45,10 +45,10 @@
   width: 100% !important;
   height: 100% !important;
   display: block;
-  object-fit: cover !important;
   -o-object-fit: cover !important;
-  object-position: center;
+  object-fit: cover !important;
   -o-object-position: center;
+  object-position: center;
   /* Ensures image always covers the container, even if aspect ratio differs */
 }
 
@@ -220,6 +220,7 @@
   width: 48px;
   height: 48px;
   border-radius: 999px;
+  -webkit-backdrop-filter: blur(6px);
   backdrop-filter: blur(6px);
   transition:
     background 0.2s ease,

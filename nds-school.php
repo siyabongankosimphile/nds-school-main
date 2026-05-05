@@ -279,6 +279,20 @@ add_filter('wp_nav_menu_items', function ($items, $args) {
         return $items;
     }
 
+    $apply_url = esc_url(home_url('/online-application/'));
+    $apply_label = esc_html__('Apply', 'nds-school');
+    if (strpos($items, $apply_url) === false && stripos($items, 'menu-item-nds-apply') === false && stripos($items, 'online-application') === false) {
+        $items .= '<li class="menu-item menu-item-nds-apply"><a href="' . $apply_url . '">' . $apply_label . '</a></li>';
+    }
+
+    if (!is_user_logged_in()) {
+        $login_url = esc_url(wp_login_url(home_url('/portal/')));
+        $login_label = esc_html__('Login', 'nds-school');
+        if (strpos($items, $login_url) === false && stripos($items, 'menu-item-nds-login') === false && stripos($items, 'wp-login.php') === false) {
+            $items .= '<li class="menu-item menu-item-nds-login"><a href="' . $login_url . '">' . $login_label . '</a></li>';
+        }
+    }
+
     $student_portal_url = esc_url(home_url('/portal/'));
     $student_label = esc_html__('Student Portal', 'nds-school');
 

@@ -25,15 +25,34 @@ function nds_applicants_dashboard() {
             wp_die('Security check failed. Please try again.');
         }
         
-        $action = sanitize_text_field($_POST['bulk_action']);
-        $application_ids = array_map('intval', $_POST['application_ids']);
+        $action = sanitize_text_field(wp_unslash($_POST['bulk_action']));
+        $application_ids = array_map('intval', (array) wp_unslash($_POST['application_ids']));
         
         switch ($action) {
             case 'delete':
                 nds_bulk_delete_applications($application_ids);
                 break;
             case 'update_status':
-                $new_status = sanitize_text_field($_POST['new_status']);
+                $new_status = isset($_POST['new_status']) ? sanitize_text_field(wp_unslash($_POST['new_status'])) : '';
+                $allowed_statuses = array(
+                    'submitted',
+                    'under_review',
+                    'waitlisted',
+                    'conditional_offer',
+                    'offer_made',
+                    'accepted',
+                    'declined',
+                    'withdrawn',
+                    'rejected',
+                    'expired',
+                );
+
+                if (!in_array($new_status, $allowed_statuses, true)) {
+                    $_SESSION['nds_status_update_error'] = 'Select a valid status for bulk update.';
+                    wp_redirect(admin_url('admin.php?page=nds-applicants'));
+                    exit;
+                }
+
                 nds_bulk_update_application_status($application_ids, $new_status);
                 break;
         }
@@ -379,6 +398,19 @@ function nds_applicants_dashboard() {
                             <option value="update_status">Update status</option>
                             <option value="delete">Delete</option>
                         </select>
+                        <select name="new_status" id="bulk-new-status" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent hidden" aria-label="Bulk new status">
+                            <option value="">Select status</option>
+                            <option value="submitted">Submitted</option>
+                            <option value="under_review">Under Review</option>
+                            <option value="waitlisted">Waitlisted</option>
+                            <option value="conditional_offer">Conditional Offer</option>
+                            <option value="offer_made">Offer Made</option>
+                            <option value="accepted">Accepted</option>
+                            <option value="declined">Declined</option>
+                            <option value="withdrawn">Withdrawn</option>
+                            <option value="rejected">Rejected</option>
+                            <option value="expired">Expired</option>
+                        </select>
                         <button type="submit" id="bulk-action-apply"
                                 class="inline-flex items-center px-3 py-2 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
                                 disabled>
@@ -457,7 +489,7 @@ function nds_applicants_dashboard() {
                         <?php foreach ($applications as $app): ?>
                         <tr>
                                         <td class="px-5 py-2 align-top">
-                                            <input type="checkbox" name="application_ids[]" value="<?php echo $app['id']; ?>" class="application-checkbox rounded border-gray-300">
+                                            <input type="checkbox" name="application_ids[]" value="<?php echo $app['id']; ?>" form="bulk-actions-form" class="application-checkbox rounded border-gray-300">
                                         </td>
                                         <td class="px-5 py-2 whitespace-nowrap text-gray-900 font-medium">
                                             <?php echo esc_html($app['application_no']); ?>
@@ -738,6 +770,7 @@ function nds_applicants_dashboard() {
         const selectAllCheckbox = document.getElementById('select-all-applications');
         const bulkActionButton = document.getElementById('bulk-action-apply');
         const bulkActionSelector = document.getElementById('bulk-action-selector');
+        const bulkStatusSelector = document.getElementById('bulk-new-status');
         const statusModal = document.getElementById('status-modal');
 
         if (selectAllCheckbox) {
@@ -756,13 +789,57 @@ function nds_applicants_dashboard() {
             bulkActionSelector.addEventListener('change', updateBulkActionButton);
         }
 
+        if (bulkStatusSelector) {
+            bulkStatusSelector.addEventListener('change', updateBulkActionButton);
+        }
+
+        const bulkActionsForm = document.getElementById('bulk-actions-form');
+        if (bulkActionsForm) {
+            bulkActionsForm.addEventListener('submit', function(event) {
+                const checked = document.querySelectorAll('.application-checkbox:checked');
+                const selectedAction = bulkActionSelector ? bulkActionSelector.value : '';
+                const selectedStatus = bulkStatusSelector ? bulkStatusSelector.value : '';
+
+                if (!checked.length) {
+                    event.preventDefault();
+                    alert('Select at least one application.');
+                    return;
+                }
+
+                if (!selectedAction) {
+                    event.preventDefault();
+                    alert('Select a bulk action.');
+                    return;
+                }
+
+                if (selectedAction === 'update_status' && !selectedStatus) {
+                    event.preventDefault();
+                    alert('Select a new status for bulk update.');
+                    return;
+                }
+
+                if (selectedAction === 'delete' && !window.confirm('Delete selected applications? This cannot be undone.')) {
+                    event.preventDefault();
+                }
+            });
+        }
+
         function updateBulkActionButton() {
             const checked = document.querySelectorAll('.application-checkbox:checked');
             const selectedAction = bulkActionSelector ? bulkActionSelector.value : '';
+            const requiresStatus = selectedAction === 'update_status';
+
+            if (bulkStatusSelector) {
+                bulkStatusSelector.classList.toggle('hidden', !requiresStatus);
+            }
+
+            const hasValidStatus = !requiresStatus || (bulkStatusSelector && bulkStatusSelector.value);
             if (bulkActionButton) {
-                bulkActionButton.disabled = checked.length === 0 || !selectedAction;
+                bulkActionButton.disabled = checked.length === 0 || !selectedAction || !hasValidStatus;
             }
         }
+
+        updateBulkActionButton();
         
         if (statusModal && statusModal.parentElement !== document.body) {
             document.body.appendChild(statusModal);
@@ -1682,6 +1759,10 @@ function nds_view_application_details($application_id) {
  */
 function nds_update_application_status($application_id, $new_status, $notes = '', $notify_applicant = false) {
     global $wpdb;
+
+    // Values resolved during accepted-flow to append to application update safely
+    $resolved_course_id_for_update = 0;
+    $resolved_program_id_for_update = 0;
     
     // #region agent log: status update entry - capture course_name BEFORE update
     $forms_table = $wpdb->prefix . 'nds_application_forms';
@@ -1844,13 +1925,11 @@ function nds_update_application_status($application_id, $new_status, $notes = ''
             }
 
             if ($resolved_course_id > 0) {
-                $update_data['course_id'] = $resolved_course_id;
-                $update_formats[] = '%d';
+                $resolved_course_id_for_update = $resolved_course_id;
             }
 
             if ($resolved_program_id > 0) {
-                $update_data['program_id'] = $resolved_program_id;
-                $update_formats[] = '%d';
+                $resolved_program_id_for_update = $resolved_program_id;
             }
         }
     }
@@ -1873,6 +1952,16 @@ function nds_update_application_status($application_id, $new_status, $notes = ''
         $update_data['semester_id'] = $semester_id;
         $update_formats[] = '%d'; // for academic_year_id
         $update_formats[] = '%d'; // for semester_id
+    }
+
+    if ($resolved_course_id_for_update > 0) {
+        $update_data['course_id'] = $resolved_course_id_for_update;
+        $update_formats[] = '%d';
+    }
+
+    if ($resolved_program_id_for_update > 0) {
+        $update_data['program_id'] = $resolved_program_id_for_update;
+        $update_formats[] = '%d';
     }
     
     $result = $wpdb->update(
@@ -2047,6 +2136,64 @@ function nds_update_application_status($application_id, $new_status, $notes = ''
                 // via manual registration submission in the learner portal.
             }
         }
+
+        // Keep legacy form status aligned with workflow status used by admin/staff dashboards.
+        $forms_status_map = array(
+            'submitted'         => 'pending',
+            'under_review'      => 'reviewed',
+            'waitlisted'        => 'reviewed',
+            'conditional_offer' => 'reviewed',
+            'offer_made'        => 'reviewed',
+            'accepted'          => 'accepted',
+            'declined'          => 'rejected',
+            'withdrawn'         => 'rejected',
+            'rejected'          => 'rejected',
+            'expired'           => 'rejected',
+        );
+
+        if (isset($forms_status_map[$new_status])) {
+            $wpdb->update(
+                $wpdb->prefix . 'nds_application_forms',
+                array('status' => $forms_status_map[$new_status]),
+                array('application_id' => $application_id),
+                array('%s'),
+                array('%d')
+            );
+        }
+
+        if ($new_status === 'accepted' && function_exists('nds_move_application_files_to_student')) {
+            nds_move_application_files_to_student($application_id);
+        }
+
+        // Optionally notify the applicant via email about this status change
+        if ($notify_applicant) {
+            $application = $wpdb->get_row($wpdb->prepare("\n                SELECT \n                    a.application_no,\n                    a.status,\n                    af.full_name,\n                    af.email\n                FROM {$wpdb->prefix}nds_applications a\n                LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id\n                WHERE a.id = %d\n            ", $application_id), ARRAY_A);
+
+            if ($application && !empty($application['email'])) {
+                $site_name   = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+                $status_label = ucfirst(str_replace('_', ' ', $new_status));
+                $subject    = sprintf(
+                    '[%s] Your application %s status has been updated',
+                    $site_name,
+                    $application['application_no']
+                );
+
+                $message  = "Hi " . ($application['full_name'] ?: 'there') . ",\n\n";
+                $message .= "The status of your application (" . $application['application_no'] . ") has been updated to: " . $status_label . ".\n\n";
+                if (!empty($notes)) {
+                    $message .= "Notes from our admissions team:\n" . $notes . "\n\n";
+                }
+                $message .= "If you have any questions, please reply to this email or contact the admissions office.\n\n";
+                $message .= "Regards,\n" . $site_name;
+
+                wp_mail($application['email'], $subject, $message);
+            }
+        }
+
+        $_SESSION['nds_status_update_success'] = $notify_applicant
+            ? 'Application status updated and the applicant has been emailed.'
+            : 'Application status updated successfully!';
+        return true;
     } elseif ($should_enroll && $current_status === 'accepted') {
         // Status is already 'accepted' but update returned false/0 - still try to enroll (might have been missed)
         // This handles the case where enrollment failed previously
@@ -2755,32 +2902,59 @@ function nds_can_delete_application($application_id, &$failure_reason = '') {
  */
 function nds_bulk_update_application_status($application_ids, $new_status) {
     global $wpdb;
-    
-    $placeholders = implode(',', array_fill(0, count($application_ids), '%d'));
-    $application_ids[] = $new_status;
-    $application_ids[] = get_current_user_id();
-    $application_ids[] = current_time('mysql');
-    $application_ids[] = current_time('mysql');
-    
-    $result = $wpdb->query($wpdb->prepare("
-        UPDATE {$wpdb->prefix}nds_applications 
-        SET status = %s, decided_by = %d, decision_at = %s, updated_at = %s
-        WHERE id IN ($placeholders)
-    ", $application_ids));
-    
+
+    $ids = array_values(array_filter(array_map('intval', (array) $application_ids), function ($id) {
+        return $id > 0;
+    }));
+
+    if (empty($ids)) {
+        $_SESSION['nds_status_update_error'] = 'No valid applications selected for bulk update.';
+        return false;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+    $params = array_merge(
+        array($new_status, get_current_user_id(), current_time('mysql'), current_time('mysql')),
+        $ids
+    );
+
+    $result = $wpdb->query($wpdb->prepare(
+        "UPDATE {$wpdb->prefix}nds_applications
+         SET status = %s, decided_by = %d, decision_at = %s, updated_at = %s
+         WHERE id IN ($placeholders)",
+        $params
+    ));
+
     if ($result !== false) {
+        // Keep legacy application_forms status aligned for views that still read it.
+        $forms_status_map = array(
+            'submitted'         => 'pending',
+            'under_review'      => 'reviewed',
+            'waitlisted'        => 'reviewed',
+            'conditional_offer' => 'reviewed',
+            'offer_made'        => 'reviewed',
+            'accepted'          => 'accepted',
+            'declined'          => 'rejected',
+            'withdrawn'         => 'rejected',
+            'rejected'          => 'rejected',
+            'expired'           => 'rejected',
+        );
+
+        if (isset($forms_status_map[$new_status])) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->prefix}nds_application_forms SET status = %s WHERE application_id IN ($placeholders)",
+                array_merge(array($forms_status_map[$new_status]), $ids)
+            ));
+        }
+
         // For bulk accepted updates, move files for each application
         if ($new_status === 'accepted' && function_exists('nds_move_application_files_to_student')) {
-            foreach ($application_ids as $maybe_id) {
-                // Only the first N entries are IDs; later entries are metadata (status, user, timestamps)
-                if (!is_int($maybe_id)) {
-                    break;
-                }
-                nds_move_application_files_to_student($maybe_id);
+            foreach ($ids as $application_id) {
+                nds_move_application_files_to_student((int) $application_id);
             }
         }
 
-        $_SESSION['nds_status_update_success'] = 'Successfully updated ' . $result . ' application(s)!';
+        $_SESSION['nds_status_update_success'] = 'Successfully updated ' . count($ids) . ' application(s)!';
         return true;
     } else {
         $_SESSION['nds_status_update_error'] = 'Failed to update applications: ' . $wpdb->last_error;
