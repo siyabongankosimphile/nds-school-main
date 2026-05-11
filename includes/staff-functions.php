@@ -772,7 +772,7 @@ function nds_bulk_assign_lecturers() {
 
     if (empty($_POST['assignments_json'])) {
         // Nothing to do – just return to page
-        wp_redirect(admin_url('admin.php?page=nds-assign-lecturers'));
+        wp_redirect(admin_url('admin.php?page=nds-staff-management'));
         exit;
     }
 
@@ -816,7 +816,7 @@ function nds_bulk_assign_lecturers() {
 
     // Preserve faculty_id if it was in the request
     $faculty_id = isset($_POST['faculty_id']) ? intval($_POST['faculty_id']) : (isset($_GET['faculty_id']) ? intval($_GET['faculty_id']) : 0);
-    $redirect = admin_url('admin.php?page=nds-assign-lecturers&bulk_assign=success');
+    $redirect = admin_url('admin.php?page=nds-staff-management&bulk_assign=success');
     if ($faculty_id > 0) {
         $redirect = add_query_arg('faculty_id', $faculty_id, $redirect);
     }

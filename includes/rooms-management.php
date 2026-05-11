@@ -7,18 +7,45 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
+function nds_rooms_user_can_manage() {
+    if (current_user_can('manage_options')) {
+        return true;
+    }
+
+    if (function_exists('nds_can_manage_timetables')) {
+        return nds_can_manage_timetables();
+    }
+
+    return false;
+}
+
+function nds_rooms_redirect_url($query_args = array()) {
+    if (function_exists('nds_get_rooms_page_url')) {
+        return nds_get_rooms_page_url($query_args);
+    }
+
+    $base = admin_url('admin.php?page=nds-rooms');
+    if (empty($query_args)) {
+        return $base;
+    }
+
+    return add_query_arg($query_args, $base);
+}
+
 // Handle form submissions via admin_init (fires before any output, ensuring wp_redirect works)
 add_action('admin_init', 'nds_handle_room_form');
-add_action('init', 'nds_handle_room_form');
 function nds_handle_room_form() {
     if (!isset($_POST['nds_room_action'])) {
         return;
     }
-    if (!current_user_can('manage_options') && !function_exists('nds_can_manage_timetables') || (!current_user_can('manage_options') && !nds_can_manage_timetables())) {
+
+    if (!nds_rooms_user_can_manage()) {
         wp_die('Unauthorized');
     }
 
-    check_admin_referer('nds_room_action');
+    if (!isset($_POST['_wpnonce']) || !wp_verify_nonce($_POST['_wpnonce'], 'nds_room_action')) {
+        wp_die('Security check failed');
+    }
 
     global $wpdb;
     $rooms_table = $wpdb->prefix . 'nds_rooms';
@@ -54,16 +81,16 @@ function nds_handle_room_form() {
             $format[] = '%s';
             $result = $wpdb->insert($rooms_table, $data, $format);
             if ($result) {
-                wp_redirect(nds_get_rooms_page_url(array('success' => 'added')));
+                wp_redirect(nds_rooms_redirect_url(array('success' => 'added')));
             } else {
-                wp_redirect(nds_get_rooms_page_url(array('error' => rawurlencode($wpdb->last_error))));
+                wp_redirect(nds_rooms_redirect_url(array('error' => urlencode($wpdb->last_error))));
             }
         } else {
             $result = $wpdb->update($rooms_table, $data, ['id' => $room_id], $format, ['%d']);
             if ($result !== false) {
-                wp_redirect(nds_get_rooms_page_url(array('success' => 'updated')));
+                wp_redirect(nds_rooms_redirect_url(array('success' => 'updated')));
             } else {
-                wp_redirect(nds_get_rooms_page_url(array('error' => rawurlencode($wpdb->last_error))));
+                wp_redirect(nds_rooms_redirect_url(array('error' => urlencode($wpdb->last_error))));
             }
         }
         exit;
@@ -73,9 +100,9 @@ function nds_handle_room_form() {
         if ($room_id) {
             $result = $wpdb->delete($rooms_table, ['id' => $room_id], ['%d']);
             if ($result) {
-                wp_redirect(nds_get_rooms_page_url(array('success' => 'deleted')));
+                wp_redirect(nds_rooms_redirect_url(array('success' => 'deleted')));
             } else {
-                wp_redirect(nds_get_rooms_page_url(array('error' => rawurlencode($wpdb->last_error))));
+                wp_redirect(nds_rooms_redirect_url(array('error' => urlencode($wpdb->last_error))));
             }
             exit;
         }
@@ -84,7 +111,7 @@ function nds_handle_room_form() {
 
 // Main Rooms Management Page
 function nds_rooms_page() {
-    if (!current_user_can('manage_options') && !function_exists('nds_can_manage_timetables') || (!current_user_can('manage_options') && !nds_can_manage_timetables())) {
+    if (!nds_rooms_user_can_manage()) {
         wp_die('Unauthorized');
     }
     
@@ -175,7 +202,7 @@ function nds_rooms_page() {
                         </div>
                     </div>
                     <div>
-                        <a href="<?php echo esc_url(nds_get_rooms_page_url(array('add' => 1))); ?>" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg flex items-center gap-2 transition-colors duration-200 shadow-sm hover:shadow-md">
+                        <a href="<?php echo esc_url(nds_rooms_redirect_url(array('add' => 1))); ?>" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg flex items-center gap-2 transition-colors duration-200 shadow-sm hover:shadow-md">
                             <i class="fas fa-plus text-sm"></i>
                             Add New Room
                         </a>
@@ -198,7 +225,7 @@ function nds_rooms_page() {
                         <?php echo $edit_id ? 'Edit Room / Venue' : 'Add New Room / Venue'; ?>
                     </h2>
                 </div>
-                <form method="post" action="<?php echo esc_url(nds_get_rooms_page_url()); ?>" class="px-6 py-6">
+                <form method="post" action="<?php echo esc_url(nds_rooms_redirect_url()); ?>" class="px-6 py-6">
                     <?php wp_nonce_field('nds_room_action'); ?>
                     <input type="hidden" name="nds_room_action" value="<?php echo $edit_id ? 'edit' : 'add'; ?>">
                     <?php if ($edit_id): ?>
@@ -276,7 +303,7 @@ function nds_rooms_page() {
                                 class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-6 rounded-lg text-sm transition-colors shadow-sm">
                             <?php echo $edit_id ? 'Update Room' : 'Add Room'; ?>
                         </button>
-                        <a href="<?php echo esc_url(admin_url('admin.php?page=nds-rooms')); ?>"
+                        <a href="<?php echo esc_url(nds_rooms_redirect_url()); ?>"
                            class="bg-white hover:bg-gray-50 text-gray-700 font-semibold py-2.5 px-6 rounded-lg text-sm border border-gray-300 transition-colors">
                             Cancel
                         </a>
@@ -401,7 +428,7 @@ function nds_rooms_page() {
                                 <i class="fas fa-filter"></i> Filter
                             </button>
                             <?php if ($search || $type_filter || $status_filter): ?>
-                                <a href="<?php echo admin_url('admin.php?page=nds-rooms'); ?>" class="flex-1 bg-white hover:bg-gray-50 text-gray-700 font-bold py-2.5 px-4 rounded-lg text-sm border border-gray-300 transition-all duration-200 text-center flex items-center justify-center gap-2">
+                                <a href="<?php echo esc_url(nds_rooms_redirect_url()); ?>" class="flex-1 bg-white hover:bg-gray-50 text-gray-700 font-bold py-2.5 px-4 rounded-lg text-sm border border-gray-300 transition-all duration-200 text-center flex items-center justify-center gap-2">
                                     <i class="fas fa-undo text-xs"></i> Clear
                                 </a>
                             <?php endif; ?>
@@ -427,7 +454,7 @@ function nds_rooms_page() {
                             <?php if (empty($rooms)): ?>
                                 <tr>
                                     <td colspan="7" class="px-6 py-12 text-center text-gray-500 italic">
-                                        No rooms found. Get started by <a href="<?php echo admin_url('admin.php?page=nds-rooms&add=1'); ?>" class="text-blue-600 hover:underline">adding your first room</a>.
+                                        No rooms found. Get started by <a href="<?php echo esc_url(nds_rooms_redirect_url(array('add' => 1))); ?>" class="text-blue-600 hover:underline">adding your first room</a>.
                                     </td>
                                 </tr>
                             <?php else: ?>
@@ -470,7 +497,7 @@ function nds_rooms_page() {
                                         </td>
                                         <td class="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                                             <div class="flex items-center justify-end gap-3">
-                                                <a href="<?php echo admin_url('admin.php?page=nds-rooms&edit=' . intval($room['id'])); ?>" 
+                                                <a href="<?php echo esc_url(nds_rooms_redirect_url(array('edit' => intval($room['id'])))); ?>" 
                                                    class="text-blue-600 hover:text-blue-800 transition-colors">Edit</a>
                                                 <form method="post" action="" class="inline" onsubmit="return confirm('Are you sure you want to delete this room?');">
                                                     <?php wp_nonce_field('nds_room_action'); ?>

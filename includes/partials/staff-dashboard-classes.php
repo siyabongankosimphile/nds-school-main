@@ -20,17 +20,32 @@ if ($selected_course_id <= 0 && !empty($courses_taught)) {
 }
 
 // Get modules grouped by course for all lecturer courses
+// Use $assigned_module_ids from parent scope (set in staff-portal.php) to restrict to assigned modules only
 $lecturer_course_ids = array_column($courses_taught, 'id');
 $modules_by_course = array();
 if (!empty($lecturer_course_ids)) {
     $ids_placeholder = implode(',', array_map('intval', $lecturer_course_ids));
-    $all_modules = $wpdb->get_results(
-        "SELECT m.id, m.name, {$module_code_expr}, m.type, {$module_status_expr}, m.course_id
-         FROM {$wpdb->prefix}nds_modules m
-         WHERE m.course_id IN ($ids_placeholder)
-         ORDER BY m.course_id ASC, m.id ASC",
-        ARRAY_A
-    );
+    if (!empty($assigned_module_ids)) {
+        // Module-level assignments exist: only show specifically assigned modules
+        $mod_placeholder = implode(',', array_map('intval', $assigned_module_ids));
+        $all_modules = $wpdb->get_results(
+            "SELECT m.id, m.name, {$module_code_expr}, m.type, {$module_status_expr}, m.course_id
+             FROM {$wpdb->prefix}nds_modules m
+             WHERE m.course_id IN ($ids_placeholder)
+             AND m.id IN ($mod_placeholder)
+             ORDER BY m.course_id ASC, m.id ASC",
+            ARRAY_A
+        );
+    } else {
+        // No module-level assignments: show all modules for assigned courses (course-level assignment)
+        $all_modules = $wpdb->get_results(
+            "SELECT m.id, m.name, {$module_code_expr}, m.type, {$module_status_expr}, m.course_id
+             FROM {$wpdb->prefix}nds_modules m
+             WHERE m.course_id IN ($ids_placeholder)
+             ORDER BY m.course_id ASC, m.id ASC",
+            ARRAY_A
+        );
+    }
     foreach ($all_modules as $mod) {
         $modules_by_course[(int) $mod['course_id']][] = $mod;
     }
@@ -82,8 +97,8 @@ if ($selected_course_id > 0) {
                 <?php foreach ($courses_taught as $course): ?>
                     <option value="<?php echo esc_attr($course['id']); ?>" <?php selected($selected_course_id, $course['id']); ?>>
                         <?php echo esc_html($course['name']); ?>
-                        <?php if (!empty($course['code'])): ?>
-                            (<?php echo esc_html($course['code']); ?>)
+                        <?php $ccode_sel = nds_safe_val($course['code'] ?? ''); if (!empty($ccode_sel)): ?>
+                            (<?php echo esc_html($ccode_sel); ?>)
                         <?php endif; ?>
                     </option>
                 <?php endforeach; ?>
@@ -111,8 +126,8 @@ if ($selected_course_id > 0) {
                             <i class="fas fa-book text-blue-500"></i>
                             <div>
                                 <span class="font-medium text-gray-900"><?php echo esc_html($course['name']); ?></span>
-                                <?php if (!empty($course['code'])): ?>
-                                    <span class="ml-2 text-xs text-gray-500">(<?php echo esc_html($course['code']); ?>)</span>
+                                <?php $ccode_acc = nds_safe_val($course['code'] ?? ''); if (!empty($ccode_acc)): ?>
+                                    <span class="ml-2 text-xs text-gray-500">(<?php echo esc_html($ccode_acc); ?>)</span>
                                 <?php endif; ?>
                             </div>
                         </div>
@@ -140,7 +155,7 @@ if ($selected_course_id > 0) {
                                     <tbody class="bg-white divide-y divide-gray-100">
                                         <?php foreach ($course_modules as $mod): ?>
                                             <tr class="hover:bg-gray-50">
-                                                <td class="px-4 py-2 font-mono text-blue-700"><?php echo esc_html($mod['module_code'] ?? '—'); ?></td>
+                                                <td class="px-4 py-2 font-mono text-blue-700"><?php $mc = nds_safe_val($mod['module_code'] ?? ''); echo $mc ? esc_html($mc) : '—'; ?></td>
                                                 <td class="px-4 py-2 text-gray-900"><?php echo esc_html($mod['name']); ?></td>
                                                 <td class="px-4 py-2 capitalize text-gray-600"><?php echo esc_html($mod['type'] ?? '—'); ?></td>
                                                 <td class="px-4 py-2">
@@ -173,8 +188,9 @@ if ($selected_course_id > 0) {
                         <?php 
                         $selected_course = $wpdb->get_row($wpdb->prepare("SELECT * FROM {$wpdb->prefix}nds_courses WHERE id = %d", $selected_course_id), ARRAY_A);
                         echo esc_html($selected_course['name'] ?? 'Course');
-                        if (!empty($selected_course['code'])) {
-                            echo ' (' . esc_html($selected_course['code']) . ')';
+                        $sel_ccode = nds_safe_val($selected_course['code'] ?? '');
+                        if (!empty($sel_ccode)) {
+                            echo ' (' . esc_html($sel_ccode) . ')';
                         }
                         ?>
                     </h3>

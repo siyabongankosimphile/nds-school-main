@@ -726,7 +726,7 @@ function course_form($typ, $course = null, $program_id = null, $url = null, $mod
 ?>
     <div class="space-y-6">
 <?php } ?>
-        <input type="hidden" name="code" value="null">
+        <input type="hidden" name="code" value="">
         <input type="hidden" name="currency" value="ZAR" />
         <fieldset class="space-y-4">
             <legend class="text-lg font-semibold text-gray-700">Qualification Details</legend>

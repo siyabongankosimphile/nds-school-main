@@ -1179,8 +1179,74 @@ document.addEventListener('DOMContentLoaded', function() {
     const appStep2 = document.getElementById('nds-step-2');
     const appForm = appStep2 ? appStep2.querySelector('form') : null;
     if (appForm) {
+      let isSubmitting = false;
+      const submitBtn = appForm.querySelector('button[type="submit"], input[type="submit"]');
+      const originalSubmitLabel = submitBtn
+        ? ((submitBtn.tagName && submitBtn.tagName.toLowerCase() === 'input') ? submitBtn.value : submitBtn.textContent)
+        : 'Submit';
+
+      function setSubmitButtonState(isSubmitting, label) {
+        if (!submitBtn) {
+          return;
+        }
+
+        submitBtn.disabled = isSubmitting;
+        if (submitBtn.tagName && submitBtn.tagName.toLowerCase() === 'input') {
+          submitBtn.value = label;
+        } else {
+          submitBtn.textContent = label;
+        }
+      }
+
+      function getOrCreateApplicationMessage(id, className) {
+        let messageDiv = document.getElementById(id);
+        if (!messageDiv) {
+          messageDiv = document.createElement('div');
+          messageDiv.id = id;
+          messageDiv.className = className;
+          messageDiv.style.display = 'block';
+          messageDiv.style.marginTop = '20px';
+          messageDiv.style.marginBottom = '20px';
+          appForm.insertBefore(messageDiv, appForm.firstChild);
+        }
+        return messageDiv;
+      }
+
+      function showApplicationError(message) {
+        const successDiv = document.getElementById('nds-application-success');
+        if (successDiv) {
+          successDiv.style.display = 'none';
+        }
+
+        const errorDiv = getOrCreateApplicationMessage('nds-application-error', 'nds-error');
+        errorDiv.textContent = 'ERROR: ' + message;
+        errorDiv.style.display = 'block';
+        errorDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
+      function showApplicationSuccess(applicationId) {
+        const errorDiv = document.getElementById('nds-application-error');
+        if (errorDiv) {
+          errorDiv.style.display = 'none';
+        }
+
+        const successDiv = getOrCreateApplicationMessage('nds-application-success', 'nds-success-inline');
+        const refText = applicationId ? ' Reference: ' + applicationId + '.' : '';
+        successDiv.textContent = 'Application submitted successfully.' + refText + ' Redirecting to your portal...';
+        successDiv.style.display = 'block';
+        successDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      }
+
       appForm.addEventListener('submit', function (e) {
         e.preventDefault(); // PREVENT default form submission - we'll use AJAX
+
+        // Guard against accidental double-clicks / duplicate submissions.
+        if (isSubmitting) {
+          return;
+        }
+        isSubmitting = true;
+
+        let submissionCompleted = false;
         
         // #region agent log: form submit intercepted for AJAX
         try {
@@ -1203,11 +1269,7 @@ document.addEventListener('DOMContentLoaded', function() {
         // #endregion
 
         // Disable submit button
-        const submitBtn = appForm.querySelector('input[type="submit"]');
-        if (submitBtn) {
-          submitBtn.disabled = true;
-          submitBtn.value = 'Submitting...';
-        }
+        setSubmitButtonState(true, 'Submitting...');
 
         // Build FormData from form
         const formData = new FormData(appForm);
@@ -1215,12 +1277,37 @@ document.addEventListener('DOMContentLoaded', function() {
         formData.append('nonce', '<?php echo wp_create_nonce("nds_application_form"); ?>'); // Add fresh nonce
 
         // Submit via AJAX
+        const requestController = new AbortController();
+        const requestTimeoutMs = 120000;
+        const requestTimeoutId = window.setTimeout(function() {
+          requestController.abort();
+        }, requestTimeoutMs);
+
         fetch(ajaxUrl, {
           method: 'POST',
           credentials: 'same-origin',
-          body: formData
+          body: formData,
+          signal: requestController.signal
         })
-        .then(function(res) { return res.json(); })
+        .then(function(res) {
+          return res.text().then(function(text) {
+            let json = null;
+            try {
+              json = text ? JSON.parse(text) : null;
+            } catch (parseError) {
+              throw new Error('Unexpected server response. Please refresh and try again.');
+            }
+
+            if (!res.ok) {
+              const errMessage = (json && json.data && (json.data.message || json.data))
+                ? (json.data.message || json.data)
+                : 'Failed to submit application. Please try again.';
+              throw new Error(errMessage);
+            }
+
+            return json;
+          });
+        })
         .then(function(json) {
           // #region agent log: AJAX response received
           try {
@@ -1249,69 +1336,52 @@ document.addEventListener('DOMContentLoaded', function() {
             const errorMsg = (json && json.data && json.data.message) 
               ? json.data.message 
               : 'Failed to submit application. Please try again.';
-            
-            // Create or update error display
-            let errorDiv = document.getElementById('nds-application-error');
-            if (!errorDiv) {
-              errorDiv = document.createElement('div');
-              errorDiv.id = 'nds-application-error';
-              errorDiv.className = 'nds-error';
-              errorDiv.style.display = 'block';
-              errorDiv.style.marginTop = '20px';
-              errorDiv.style.marginBottom = '20px';
-              appForm.insertBefore(errorDiv, appForm.firstChild);
-            }
-            errorDiv.textContent = 'ERROR: ' + errorMsg;
-            errorDiv.style.display = 'block';
-            
-            // Scroll to error
-            errorDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-            
-            if (submitBtn) {
-              submitBtn.disabled = false;
-              submitBtn.value = 'Submit';
-            }
+            showApplicationError(errorMsg);
             return;
           }
 
-          // Success: Redirect to portal with application ID
-          if (json.data && json.data.redirect_url) {
-            window.location.href = json.data.redirect_url;
-          } else {
-            // Fallback redirect
-            const portalUrl = "<?php echo esc_js( home_url('/portal/') ); ?>";
-            const redirectUrl = new URL(portalUrl);
+          // Success: show immediate confirmation, then redirect to a cache-busting URL.
+          submissionCompleted = true;
+          const submittedApplicationId = json && json.data ? json.data.application_id : '';
+          showApplicationSuccess(submittedApplicationId);
+          setSubmitButtonState(true, 'Submitted');
+
+          try {
+            const baseRedirect = (json.data && json.data.redirect_url)
+              ? json.data.redirect_url
+              : "<?php echo esc_js( home_url('/portal/') ); ?>";
+
+            const redirectUrl = new URL(baseRedirect, window.location.origin);
             redirectUrl.searchParams.set('application', 'success');
-            if (json.data && json.data.application_id) {
-              redirectUrl.searchParams.set('id', json.data.application_id);
+            if (submittedApplicationId) {
+              redirectUrl.searchParams.set('id', submittedApplicationId);
             }
-            window.location.href = redirectUrl.toString();
+            redirectUrl.searchParams.set('submitted_at', String(Date.now()));
+
+            window.setTimeout(function() {
+              window.location.replace(redirectUrl.toString());
+            }, 800);
+          } catch (redirectError) {
+            window.setTimeout(function() {
+              window.location.reload();
+            }, 800);
           }
         })
         .catch(function(error) {
           console.error('Application submission error:', error);
-          
-          // Show error on page
-          let errorDiv = document.getElementById('nds-application-error');
-          if (!errorDiv) {
-            errorDiv = document.createElement('div');
-            errorDiv.id = 'nds-application-error';
-            errorDiv.className = 'nds-error';
-            errorDiv.style.display = 'block';
-            errorDiv.style.marginTop = '20px';
-            errorDiv.style.marginBottom = '20px';
-            const appForm = document.getElementById('nds-step-2').querySelector('form');
-            if (appForm) {
-              appForm.insertBefore(errorDiv, appForm.firstChild);
-            }
+          if (error && error.name === 'AbortError') {
+            showApplicationError('Submission timed out. Please check your connection and try again.');
+            return;
           }
-          errorDiv.textContent = 'ERROR: Network error - ' + (error.message || 'Failed to submit application. Please check your connection and try again.');
-          errorDiv.style.display = 'block';
-          errorDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
-          
-          if (submitBtn) {
-            submitBtn.disabled = false;
-            submitBtn.value = 'Submit';
+          showApplicationError(error.message || 'Network error. Please check your connection and try again.');
+        })
+        .finally(function() {
+          window.clearTimeout(requestTimeoutId);
+          if (!submissionCompleted) {
+            setSubmitButtonState(false, originalSubmitLabel || 'Submit');
+            isSubmitting = false;
+          } else {
+            isSubmitting = true;
           }
         });
       });

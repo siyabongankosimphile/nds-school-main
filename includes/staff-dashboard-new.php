@@ -66,7 +66,7 @@ function nds_staff_dashboard_improved() {
                         </div>
                         <button id="addStaffBtn" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2.5 px-5 rounded-lg flex items-center gap-2 transition-colors duration-200 shadow-sm hover:shadow-md">
                             <i class="fas fa-plus text-sm"></i>
-                            Add Lecturer
+                            Add Staff
                         </button>
                     </div>
                 </div>
@@ -510,7 +510,7 @@ function nds_staff_dashboard_improved() {
                     <div class="mt-8 flex justify-end gap-3 pt-6 border-t border-gray-200">
                         <button type="button" id="cancelAddStaff" class="bg-gray-100 hover:bg-gray-200 text-gray-700 font-medium py-2 px-6 rounded-lg transition-colors duration-200">Cancel</button>
                         <button type="submit" class="bg-blue-600 hover:bg-blue-700 text-white font-semibold py-2 px-6 rounded-lg flex items-center gap-2 transition-colors duration-200 shadow-md hover:shadow-lg">
-                            <i class="fas fa-save"></i>Add Lecturer
+                            <i class="fas fa-save"></i>Add Staff
                         </button>
                     </div>
                 </form>

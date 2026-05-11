@@ -88,6 +88,15 @@ function nds_staff_course_is_owned_by_lecturer($staff_id, $course_id) {
     return in_array((int) $course_id, $course_ids, true);
 }
 
+function nds_staff_module_is_owned_by_lecturer($staff_id, $module_id) {
+    if ($staff_id <= 0 || $module_id <= 0) {
+        return false;
+    }
+
+    $module_ids = nds_staff_get_lecturer_module_ids($staff_id);
+    return in_array((int) $module_id, $module_ids, true);
+}
+
 function nds_staff_require_lecturer() {
     if (!is_user_logged_in()) {
         wp_die('Unauthorized');
@@ -402,6 +411,9 @@ add_action('admin_post_nds_staff_create_content', function () {
         nds_staff_redirect_with_notice('content_error', 'invalid_module', 'content');
     }
     $module_course_id = (int) $module_row['course_id'];
+    if (!nds_staff_module_is_owned_by_lecturer($staff_id, $module_id)) {
+        nds_staff_redirect_with_notice('content_error', 'permission', 'content');
+    }
     if (!nds_staff_course_is_owned_by_lecturer($staff_id, $module_course_id)) {
         nds_staff_redirect_with_notice('content_error', 'permission', 'content');
     }
@@ -548,6 +560,9 @@ add_action('admin_post_nds_staff_update_content', function () {
         nds_staff_redirect_with_notice('content_error', 'invalid_module', 'content');
     }
     $module_course_id = (int) $module_row['course_id'];
+    if (!nds_staff_module_is_owned_by_lecturer($staff_id, $module_id)) {
+        nds_staff_redirect_with_notice('content_error', 'permission', 'content');
+    }
     if (!nds_staff_course_is_owned_by_lecturer($staff_id, $module_course_id)) {
         nds_staff_redirect_with_notice('content_error', 'permission', 'content');
     }
@@ -691,7 +706,7 @@ add_action('admin_post_nds_staff_create_assessment', function () {
             $course_id
         ));
 
-        if (empty($module_exists)) {
+        if (empty($module_exists) || !nds_staff_module_is_owned_by_lecturer($staff_id, $module_id)) {
             nds_staff_redirect_with_notice('assessment_error', 'invalid_module', 'assessments');
         }
     }
@@ -778,7 +793,7 @@ add_action('admin_post_nds_staff_grade_submission', function () {
 
     global $wpdb;
     $submission = $wpdb->get_row($wpdb->prepare(
-        "SELECT sub.id, sub.assessment_id, a.course_id
+        "SELECT sub.id, sub.assessment_id, a.course_id, a.module_id
          FROM {$wpdb->prefix}nds_assessment_submissions sub
          INNER JOIN {$wpdb->prefix}nds_assessments a ON a.id = sub.assessment_id
          WHERE sub.id = %d",
@@ -786,6 +801,9 @@ add_action('admin_post_nds_staff_grade_submission', function () {
     ), ARRAY_A);
 
     if (empty($submission) || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) $submission['course_id'])) {
+        nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
+    }
+    if ((int) ($submission['module_id'] ?? 0) > 0 && !nds_staff_module_is_owned_by_lecturer($staff_id, (int) $submission['module_id'])) {
         nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
     }
 
@@ -837,6 +855,9 @@ add_action('admin_post_nds_staff_grade_content_assignment_submission', function 
     ), ARRAY_A);
 
     if (empty($submission) || (int) ($submission['staff_id'] ?? 0) !== (int) $staff_id || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) ($submission['course_id'] ?? 0))) {
+        nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
+    }
+    if ((int) ($submission['module_id'] ?? 0) > 0 && !nds_staff_module_is_owned_by_lecturer($staff_id, (int) $submission['module_id'])) {
         nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
     }
 

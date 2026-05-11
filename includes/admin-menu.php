@@ -234,16 +234,6 @@ function nds_school_add_admin_menu() {
         'nds_staff_dashboard'
     );
 
-    // Lecturer Assignment page (drag-and-drop)
-    add_submenu_page(
-        'nds-academy',
-        'Assign Lecturers',
-        'Assign Lecturers',
-        'manage_options',
-        'nds-assign-lecturers',
-        'nds_assign_lecturers_page'
-    );
-
     // ============================================================================
     // STUDENTS (Simplified - was "Learner Management")
     // ============================================================================

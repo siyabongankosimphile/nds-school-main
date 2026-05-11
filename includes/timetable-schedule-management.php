@@ -627,7 +627,10 @@ function deleteSchedule(scheduleId) {
 // Program filter
 document.getElementById('program_filter').addEventListener('change', function() {
     if (this.value) {
-        window.location.href = '<?php echo esc_url_raw(nds_get_timetable_page_url()); ?>&program_id=' + this.value;
+        const nextUrl = new URL(window.location.href);
+        nextUrl.searchParams.set('tab', 'schedule');
+        nextUrl.searchParams.set('program_id', this.value);
+        window.location.href = nextUrl.toString();
     }
 });
 

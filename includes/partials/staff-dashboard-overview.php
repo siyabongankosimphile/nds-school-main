@@ -107,8 +107,8 @@ if (!defined('ABSPATH')) {
                             <div class="flex items-start justify-between mb-3">
                                 <div class="flex-1">
                                     <h4 class="font-semibold text-gray-900 mb-1"><?php echo esc_html($course['name']); ?></h4>
-                                    <?php if (!empty($course['code'])): ?>
-                                        <p class="text-sm text-gray-500"><?php echo esc_html($course['code']); ?></p>
+                                    <?php $course_code_display = nds_safe_val($course['code'] ?? ''); if (!empty($course_code_display)): ?>
+                                        <p class="text-sm text-gray-500"><?php echo esc_html($course_code_display); ?></p>
                                     <?php endif; ?>
                                 </div>
                             </div>

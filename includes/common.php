@@ -1,4 +1,20 @@
 <?php
+/**
+ * Return a safe display string, suppressing PHP null and the literal string "null".
+ * Use this wherever codes, optional fields, or nullable DB values are echoed.
+ *
+ * @param mixed $value
+ * @return string
+ */
+if (!function_exists('nds_safe_val')) {
+    function nds_safe_val($value) {
+        if ($value === null || $value === 'null' || $value === 'NULL') {
+            return '';
+        }
+        return (string) $value;
+    }
+}
+
 function create_essential_pages()
 {
     $pages = array(

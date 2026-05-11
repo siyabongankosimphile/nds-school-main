@@ -25,20 +25,45 @@ function nds_applicants_dashboard() {
             wp_die('Security check failed. Please try again.');
         }
         
-        $action = sanitize_text_field($_POST['bulk_action']);
-        $application_ids = array_map('intval', $_POST['application_ids']);
+        $action = sanitize_text_field(wp_unslash($_POST['bulk_action']));
+        $application_ids = array_map('intval', (array) wp_unslash($_POST['application_ids']));
         
         switch ($action) {
             case 'delete':
                 nds_bulk_delete_applications($application_ids);
                 break;
             case 'update_status':
-                $new_status = sanitize_text_field($_POST['new_status']);
+                $new_status = isset($_POST['new_status']) ? sanitize_text_field(wp_unslash($_POST['new_status'])) : '';
+                $allowed_statuses = array(
+                    'submitted',
+                    'under_review',
+                    'waitlisted',
+                    'conditional_offer',
+                    'offer_made',
+                    'accepted',
+                    'declined',
+                    'withdrawn',
+                    'rejected',
+                    'expired',
+                );
+
+                if (!in_array($new_status, $allowed_statuses, true)) {
+                    $_SESSION['nds_status_update_error'] = 'Select a valid status for bulk update.';
+                    wp_redirect(admin_url('admin.php?page=nds-applicants'));
+                    exit;
+                }
+
                 nds_bulk_update_application_status($application_ids, $new_status);
                 break;
         }
     }
     
+    // Handle "New Application" action (admin creates application on behalf of student)
+    if (isset($_GET['action']) && $_GET['action'] === 'new') {
+        nds_render_admin_new_application_form();
+        return;
+    }
+
     // Handle single application actions
     if (isset($_GET['action']) && isset($_GET['id'])) {
         $action = sanitize_text_field($_GET['action']);
@@ -88,6 +113,17 @@ function nds_applicants_dashboard() {
 
             $reason_note = 'Rejection reason: ' . $reason_options[$reject_reason];
             $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+        } else {
+            $reason_options = nds_get_reason_options_for_status($new_status);
+            if (!empty($reason_options)) {
+                if (empty($reject_reason) || !isset($reason_options[$reject_reason])) {
+                    $_SESSION['nds_status_update_error'] = 'Please select a reason for the chosen status before saving.';
+                    wp_redirect(admin_url('admin.php?page=nds-applicants'));
+                    exit;
+                }
+                $reason_note = ucfirst(str_replace('_', ' ', $new_status)) . ' reason: ' . $reason_options[$reject_reason];
+                $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+            }
         }
         
         // Debug logging
@@ -110,6 +146,25 @@ function nds_applicants_dashboard() {
     $filter_program_id = isset($_GET['filter_program_id']) ? max(0, intval($_GET['filter_program_id'])) : 0;
     $filter_faculty_id = isset($_GET['filter_faculty_id']) ? max(0, intval($_GET['filter_faculty_id'])) : 0;
     $filter_course_id = isset($_GET['filter_course_id']) ? max(0, intval($_GET['filter_course_id'])) : 0;
+    $filter_status    = isset($_GET['filter_status']) ? sanitize_text_field(wp_unslash($_GET['filter_status'])) : '';
+
+    $status_filter_options = array(
+        'submitted'         => 'Submitted',
+        'under_review'      => 'Under Review',
+        'waitlisted'        => 'Waitlisted',
+        'conditional_offer' => 'Conditional Offer',
+        'offer_made'        => 'Offer Made',
+        'accepted'          => 'Accepted',
+        'accepted_group'    => 'Accepted (Accepted + Offers)',
+        'declined'          => 'Declined',
+        'withdrawn'         => 'Withdrawn',
+        'rejected'          => 'Rejected',
+        'expired'           => 'Expired',
+    );
+
+    if ($filter_status !== '' && !isset($status_filter_options[$filter_status])) {
+        $filter_status = '';
+    }
 
     $where_clauses = array("a.status != 'converted_to_student'");
     $where_values = array();
@@ -128,6 +183,13 @@ function nds_applicants_dashboard() {
         $where_clauses[] = '(a.course_id = %d OR af.course_id = %d)';
         $where_values[] = $filter_course_id;
         $where_values[] = $filter_course_id;
+    }
+
+    if ($filter_status === 'accepted_group') {
+        $where_clauses[] = "a.status IN ('accepted','offer_made','conditional_offer')";
+    } elseif ($filter_status !== '') {
+        $where_clauses[] = 'a.status = %s';
+        $where_values[] = $filter_status;
     }
 
     $where_sql = implode(' AND ', $where_clauses);
@@ -242,6 +304,48 @@ function nds_applicants_dashboard() {
     $submitted_count      = count($submitted_list);
     $under_review_count   = count($under_review_list);
     $accepted_count       = count($accepted_list);
+
+    // Per-status counts for tabs
+    $status_counts = array();
+    foreach ($all_active_applications as $row) {
+        $st = $row['status'];
+        if (!isset($status_counts[$st])) { $status_counts[$st] = 0; }
+        $status_counts[$st]++;
+    }
+    $count_for = function($key) use ($status_counts) {
+        if ($key === '') { return array_sum($status_counts); }
+        if ($key === 'accepted_group') {
+            return (isset($status_counts['accepted']) ? $status_counts['accepted'] : 0)
+                 + (isset($status_counts['offer_made']) ? $status_counts['offer_made'] : 0)
+                 + (isset($status_counts['conditional_offer']) ? $status_counts['conditional_offer'] : 0);
+        }
+        return isset($status_counts[$key]) ? $status_counts[$key] : 0;
+    };
+
+    // Tabs definition (order matters)
+    $status_tabs = array(
+        ''               => array('label' => 'All',           'color' => 'blue'),
+        'submitted'      => array('label' => 'Submitted',     'color' => 'indigo'),
+        'under_review'   => array('label' => 'Under Review',  'color' => 'amber'),
+        'accepted_group' => array('label' => 'Accepted',      'color' => 'emerald'),
+        'waitlisted'     => array('label' => 'Waitlisted',    'color' => 'sky'),
+        'rejected'       => array('label' => 'Rejected',      'color' => 'red'),
+        'declined'       => array('label' => 'Declined',      'color' => 'rose'),
+        'withdrawn'      => array('label' => 'Withdrawn',     'color' => 'gray'),
+        'expired'        => array('label' => 'Expired',       'color' => 'gray'),
+    );
+
+    $tab_base_args = array_filter(array(
+        'page'              => 'nds-applicants',
+        'filter_program_id' => $filter_program_id ?: null,
+        'filter_faculty_id' => $filter_faculty_id ?: null,
+        'filter_course_id'  => $filter_course_id ?: null,
+    ));
+    $tab_url = function($status) use ($tab_base_args) {
+        $args = $tab_base_args;
+        if ($status !== '') { $args['filter_status'] = $status; }
+        return admin_url('admin.php?' . http_build_query($args));
+    };
     ?>
     <style>
         /* Ensure the WordPress footer doesn't overlap our custom dashboard */
@@ -261,28 +365,34 @@ function nds_applicants_dashboard() {
                             <h1 class="text-3xl font-bold text-gray-900">Applications Management</h1>
                             <p class="text-gray-600 text-sm sm:text-base">
                                 Review, update, and convert applications into student records.
+                                <?php if ($filter_status !== ''): ?>
+                                    <span class="inline-flex items-center ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                                        Filtered: <?php echo esc_html($status_filter_options[$filter_status]); ?>
+                                    </span>
+                                <?php endif; ?>
                             </p>
                         </div>
+                    </div>
+                    <div class="flex items-center gap-3">
+                        <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants&action=new')); ?>"
+                           class="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm">
+                            <span class="dashicons dashicons-plus-alt2 text-sm mr-1"></span>
+                            New Application
+                        </a>
                     </div>
                 </div>
             </div>
         </div>
 
         <!-- Main Content -->
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-            <!-- Application actions / quick controls -->
-            <div class="bg-white shadow-sm rounded-xl border border-gray-100 p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                    <h2 class="text-sm font-semibold text-gray-900">Manage this application</h2>
-                    <p class="text-xs text-gray-500">
-                        Use the quick actions to move this application forward and optionally notify the applicant by email.
-                    </p>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                    <p class="text-xs text-gray-500">Select applications from the list below to manage them.</p>
-                </div>
-            </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
             <!-- Flash messages -->
+        <?php if (isset($_GET['app_created']) && $_GET['app_created'] === '1'): ?>
+                <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center">
+                    <span class="dashicons dashicons-yes-alt text-emerald-600 mr-3 text-xl"></span>
+                    <p class="text-sm text-emerald-800">Application created successfully!</p>
+                </div>
+        <?php endif; ?>
         <?php if (isset($_SESSION['nds_status_update_success'])): ?>
                 <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center">
                     <span class="dashicons dashicons-yes-alt text-emerald-600 mr-3 text-xl"></span>
@@ -298,70 +408,31 @@ function nds_applicants_dashboard() {
                 </div>
             <?php unset($_SESSION['nds_status_update_error']); ?>
         <?php endif; ?>
-        
-            <!-- KPI Cards -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                <!-- Total Applications -->
-                <div onclick="openStatModal('total')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Total Applications</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($total_applications); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-                            <i class="fas fa-clipboard-list text-blue-600 text-xl"></i>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- Submitted -->
-                <div onclick="openStatModal('submitted')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Submitted</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($submitted_count); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center">
-                            <i class="fas fa-file-signature text-indigo-600 text-xl"></i>
-                        </div>
-                    </div>
+            <!-- Status Tabs -->
+            <style>
+                .nds-tab { display:inline-flex; align-items:center; gap:0.5rem; padding:0.625rem 1rem; font-size:0.875rem; font-weight:500; color:#4b5563; border-bottom:2px solid transparent; white-space:nowrap; text-decoration:none; transition: color .15s, border-color .15s; }
+                .nds-tab:hover { color:#111827; border-bottom-color:#d1d5db; }
+                .nds-tab.is-active { color:#1d4ed8; border-bottom-color:#2563eb; }
+                .nds-tab-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.5rem; height:1.25rem; padding:0 0.5rem; border-radius:9999px; font-size:0.6875rem; font-weight:600; background:#f3f4f6; color:#374151; }
+                .nds-tab.is-active .nds-tab-badge { background:#dbeafe; color:#1d4ed8; }
+                .nds-tabs-wrap { background:#fff; border:1px solid #f3f4f6; border-radius:0.75rem; box-shadow:0 1px 2px 0 rgb(0 0 0 / 0.05); padding:0 0.5rem; overflow-x:auto; }
+                .nds-tabs-inner { display:flex; align-items:center; gap:0.25rem; min-width:max-content; }
+            </style>
+            <nav class="nds-tabs-wrap" aria-label="Filter by status">
+                <div class="nds-tabs-inner">
+                    <?php foreach ($status_tabs as $tab_key => $tab): ?>
+                        <?php $is_active = ($filter_status === $tab_key); ?>
+                        <a href="<?php echo esc_url($tab_url($tab_key)); ?>"
+                           class="nds-tab<?php echo $is_active ? ' is-active' : ''; ?>"
+                           aria-current="<?php echo $is_active ? 'page' : 'false'; ?>">
+                            <span><?php echo esc_html($tab['label']); ?></span>
+                            <span class="nds-tab-badge"><?php echo number_format_i18n($count_for($tab_key)); ?></span>
+                        </a>
+                    <?php endforeach; ?>
                 </div>
-
-                <!-- Under Review -->
-                <div onclick="openStatModal('review')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Under Review</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($under_review_count); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
-                            <i class="fas fa-search text-amber-600 text-xl"></i>
-                        </div>
-                    </div>
-                </div>
+            </nav>
         
-                <!-- Accepted -->
-                <div onclick="openStatModal('accepted')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Accepted</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($accepted_count); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center">
-                            <i class="fas fa-check-double text-emerald-600 text-xl"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
             <!-- Applications table + filters -->
             <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
                 <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -371,21 +442,7 @@ function nds_applicants_dashboard() {
                     </div>
                 </div>
 
-                <div class="px-5 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <form method="post" id="bulk-actions-form" class="flex items-center gap-2">
-                        <?php wp_nonce_field('nds_bulk_action', 'nds_bulk_action_nonce'); ?>
-                        <select name="bulk_action" id="bulk-action-selector" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                            <option value="">Bulk actions</option>
-                            <option value="update_status">Update status</option>
-                            <option value="delete">Delete</option>
-                        </select>
-                        <button type="submit" id="bulk-action-apply"
-                                class="inline-flex items-center px-3 py-2 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                disabled>
-                            Apply
-                        </button>
-                    </form>
-
+                <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-end">
                     <div class="text-xs text-gray-500">
                         Page <?php echo number_format_i18n($page); ?> of <?php echo number_format_i18n(max(1, ceil($total_count / $per_page))); ?>
                     </div>
@@ -394,6 +451,9 @@ function nds_applicants_dashboard() {
                 <div class="px-5 py-3 border-b border-gray-100 bg-gray-50">
                     <form method="get" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                         <input type="hidden" name="page" value="nds-applicants">
+                        <?php if ($filter_status !== ''): ?>
+                            <input type="hidden" name="filter_status" value="<?php echo esc_attr($filter_status); ?>">
+                        <?php endif; ?>
                         <div>
                             <label for="filter_program_id" class="block text-xs font-medium text-gray-600 mb-1">Program</label>
                             <select id="filter_program_id" name="filter_program_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
@@ -438,9 +498,6 @@ function nds_applicants_dashboard() {
                     <table class="w-full divide-y divide-gray-200 text-sm">
                         <thead class="bg-gray-50">
                             <tr>
-                                <th class="px-5 py-2">
-                                    <input type="checkbox" id="select-all-applications" class="rounded border-gray-300">
-                                </th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">App #</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Name</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Email</th>
@@ -456,9 +513,6 @@ function nds_applicants_dashboard() {
                             <?php if (!empty($applications)): ?>
                         <?php foreach ($applications as $app): ?>
                         <tr>
-                                        <td class="px-5 py-2 align-top">
-                                            <input type="checkbox" name="application_ids[]" value="<?php echo $app['id']; ?>" class="application-checkbox rounded border-gray-300">
-                                        </td>
                                         <td class="px-5 py-2 whitespace-nowrap text-gray-900 font-medium">
                                             <?php echo esc_html($app['application_no']); ?>
                                         </td>
@@ -514,7 +568,7 @@ function nds_applicants_dashboard() {
                         <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="10" class="px-5 py-6 text-center text-sm text-gray-500">
+                                    <td colspan="9" class="px-5 py-6 text-center text-sm text-gray-500">
                                         No applications found.
                                     </td>
                                 </tr>
@@ -545,6 +599,7 @@ function nds_applicants_dashboard() {
                                     'filter_program_id' => $filter_program_id,
                                     'filter_faculty_id' => $filter_faculty_id,
                                     'filter_course_id'  => $filter_course_id,
+                                    'filter_status'     => $filter_status,
                                 )),
                             ));
                             ?>
@@ -576,27 +631,31 @@ function nds_applicants_dashboard() {
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="submitted">Submitted</option>
                                 <option value="under_review">Under Review</option>
+                                <option value="waitlisted">Waitlisted</option>
+                                <option value="conditional_offer">Conditional Offer</option>
+                                <option value="offer_made">Offer Made</option>
                                 <option value="accepted">Accepted</option>
+                                <option value="declined">Declined</option>
+                                <option value="withdrawn">Withdrawn</option>
                                 <option value="rejected">Rejected</option>
+                                <option value="expired">Expired</option>
                             </select>
                         </div>
 
                         <div id="rejection-reason-wrap" class="hidden">
-                            <label for="reject_reason" class="block text-sm font-semibold text-gray-900 mb-2">Rejection reason</label>
+                            <label for="reject_reason" id="reason-label" class="block text-sm font-semibold text-gray-900 mb-2">Reason</label>
                             <select name="reject_reason" id="reject_reason"
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="">Select reason</option>
-                                <?php foreach (nds_get_rejection_reason_options() as $reason_key => $reason_label): ?>
-                                    <option value="<?php echo esc_attr($reason_key); ?>"><?php echo esc_html($reason_label); ?></option>
-                                <?php endforeach; ?>
                             </select>
                         </div>
 
                         <div>
                             <label for="notes" class="block text-sm font-semibold text-gray-900 mb-2">Notes</label>
-                            <textarea name="notes" id="notes" rows="3"
-                                      class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                      placeholder="Add any review notes or context for this decision..."></textarea>
+                            <select name="notes" id="notes"
+                                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
+                                <option value="">Select a note</option>
+                            </select>
                         </div>
 
                         <div>
@@ -667,6 +726,8 @@ function nds_applicants_dashboard() {
     </div>
 
     <script>
+    window.NDS_STATUS_REASONS = <?php echo wp_json_encode(nds_get_status_reason_options_map()); ?>;
+    window.NDS_STATUS_NOTES   = <?php echo wp_json_encode(nds_get_status_note_options_map()); ?>;
     document.addEventListener('DOMContentLoaded', function() {
         // --- DRILL-DOWN MODAL LOGIC ---
         const statsData = {
@@ -738,6 +799,7 @@ function nds_applicants_dashboard() {
         const selectAllCheckbox = document.getElementById('select-all-applications');
         const bulkActionButton = document.getElementById('bulk-action-apply');
         const bulkActionSelector = document.getElementById('bulk-action-selector');
+        const bulkStatusSelector = document.getElementById('bulk-new-status');
         const statusModal = document.getElementById('status-modal');
 
         if (selectAllCheckbox) {
@@ -756,13 +818,57 @@ function nds_applicants_dashboard() {
             bulkActionSelector.addEventListener('change', updateBulkActionButton);
         }
 
+        if (bulkStatusSelector) {
+            bulkStatusSelector.addEventListener('change', updateBulkActionButton);
+        }
+
+        const bulkActionsForm = document.getElementById('bulk-actions-form');
+        if (bulkActionsForm) {
+            bulkActionsForm.addEventListener('submit', function(event) {
+                const checked = document.querySelectorAll('.application-checkbox:checked');
+                const selectedAction = bulkActionSelector ? bulkActionSelector.value : '';
+                const selectedStatus = bulkStatusSelector ? bulkStatusSelector.value : '';
+
+                if (!checked.length) {
+                    event.preventDefault();
+                    alert('Select at least one application.');
+                    return;
+                }
+
+                if (!selectedAction) {
+                    event.preventDefault();
+                    alert('Select a bulk action.');
+                    return;
+                }
+
+                if (selectedAction === 'update_status' && !selectedStatus) {
+                    event.preventDefault();
+                    alert('Select a new status for bulk update.');
+                    return;
+                }
+
+                if (selectedAction === 'delete' && !window.confirm('Delete selected applications? This cannot be undone.')) {
+                    event.preventDefault();
+                }
+            });
+        }
+
         function updateBulkActionButton() {
             const checked = document.querySelectorAll('.application-checkbox:checked');
             const selectedAction = bulkActionSelector ? bulkActionSelector.value : '';
+            const requiresStatus = selectedAction === 'update_status';
+
+            if (bulkStatusSelector) {
+                bulkStatusSelector.classList.toggle('hidden', !requiresStatus);
+            }
+
+            const hasValidStatus = !requiresStatus || (bulkStatusSelector && bulkStatusSelector.value);
             if (bulkActionButton) {
-                bulkActionButton.disabled = checked.length === 0 || !selectedAction;
+                bulkActionButton.disabled = checked.length === 0 || !selectedAction || !hasValidStatus;
             }
         }
+
+        updateBulkActionButton();
         
         if (statusModal && statusModal.parentElement !== document.body) {
             document.body.appendChild(statusModal);
@@ -772,16 +878,47 @@ function nds_applicants_dashboard() {
             const statusField = document.getElementById('new_status');
             const reasonWrap = document.getElementById('rejection-reason-wrap');
             const reasonField = document.getElementById('reject_reason');
+            const reasonLabel = document.getElementById('reason-label');
+            const notesField = document.getElementById('notes');
 
             if (!statusField || !reasonWrap || !reasonField) return;
 
-            if (statusField.value === 'rejected') {
+            const reasonMap = (window.NDS_STATUS_REASONS || {});
+            const opts = reasonMap[statusField.value];
+
+            if (opts && Object.keys(opts).length) {
+                // Rebuild options
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+                Object.keys(opts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = key;
+                    o.textContent = opts[key];
+                    reasonField.appendChild(o);
+                });
+                if (reasonLabel) {
+                    const labelMap = { rejected:'Rejection reason', declined:'Decline reason', waitlisted:'Waitlist reason', withdrawn:'Withdrawal reason', expired:'Expiry reason' };
+                    reasonLabel.textContent = labelMap[statusField.value] || 'Reason';
+                }
                 reasonWrap.classList.remove('hidden');
                 reasonField.required = true;
             } else {
                 reasonWrap.classList.add('hidden');
                 reasonField.required = false;
                 reasonField.value = '';
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+            }
+
+            // Populate notes dropdown for current status
+            if (notesField && notesField.tagName === 'SELECT') {
+                const notesMap = (window.NDS_STATUS_NOTES || {});
+                const noteOpts = notesMap[statusField.value] || {};
+                notesField.innerHTML = '<option value="">Select a note</option>';
+                Object.keys(noteOpts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = noteOpts[key];
+                    o.textContent = noteOpts[key];
+                    notesField.appendChild(o);
+                });
             }
         }
 
@@ -875,6 +1012,26 @@ function nds_view_application_details($application_id) {
 
             $reason_note = 'Rejection reason: ' . $reason_options[$reject_reason];
             $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+        } else {
+            $reason_options = nds_get_reason_options_for_status($new_status);
+            if (!empty($reason_options)) {
+                if (empty($reject_reason) || !isset($reason_options[$reject_reason])) {
+                    $_SESSION['nds_status_update_error'] = 'Please select a reason for the chosen status before saving.';
+                    wp_redirect(
+                        add_query_arg(
+                            array(
+                                'page'   => 'nds-applicants',
+                                'action' => 'view',
+                                'id'     => $application_id,
+                            ),
+                            admin_url('admin.php')
+                        )
+                    );
+                    exit;
+                }
+                $reason_note = ucfirst(str_replace('_', ' ', $new_status)) . ' reason: ' . $reason_options[$reject_reason];
+                $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+            }
         }
 
         // Debug logging
@@ -993,6 +1150,33 @@ function nds_view_application_details($application_id) {
                             <span class="dashicons dashicons-edit text-sm mr-1"></span>
                             Update status
                         </button>
+                        <?php
+                        $delete_block_reason = '';
+                        $can_delete = nds_can_delete_application((int) $application['id'], $delete_block_reason);
+                        $delete_url = wp_nonce_url(
+                            admin_url('admin.php?page=nds-applicants&action=delete&id=' . (int) $application['id']),
+                            'nds_applicants_action_delete_' . (int) $application['id']
+                        );
+                        ?>
+                        <?php if ($can_delete): ?>
+                            <a href="<?php echo esc_url($delete_url); ?>"
+                               onclick="return confirm('Permanently delete application <?php echo esc_js($application['application_no']); ?>? This cannot be undone.');"
+                               style="background-color:#dc2626 !important; color:#ffffff !important; border:1px solid #b91c1c !important;"
+                               onmouseover="this.style.backgroundColor='#b91c1c';"
+                               onmouseout="this.style.backgroundColor='#dc2626';"
+                               class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium no-underline">
+                                <span class="dashicons dashicons-trash text-sm mr-1"></span>
+                                Delete
+                            </a>
+                        <?php else: ?>
+                            <button type="button" disabled
+                                    title="<?php echo esc_attr($delete_block_reason); ?>"
+                                    style="background-color:#fecaca !important; color:#7f1d1d !important; border:1px solid #fca5a5 !important; opacity:0.7;"
+                                    class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium cursor-not-allowed">
+                                <span class="dashicons dashicons-trash text-sm mr-1"></span>
+                                Delete
+                            </button>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -1000,84 +1184,45 @@ function nds_view_application_details($application_id) {
 
         <!-- Main Content -->
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-            <!-- Application actions / quick controls -->
+            <?php
+            // Show Enroll / Revert actions only when relevant (after acceptance)
+            $show_post_accept_actions = false;
+            $student_id = !empty($application['student_id']) ? (int) $application['student_id'] : 0;
+            $has_enrollments = false;
+            if ($application['status'] === 'accepted' && $student_id > 0) {
+                global $wpdb;
+                $enrollment_count = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$wpdb->prefix}nds_student_enrollments WHERE student_id = %d",
+                    $student_id
+                ));
+                $has_enrollments = $enrollment_count > 0;
+                $show_post_accept_actions = true;
+            }
+            ?>
+            <?php if ($show_post_accept_actions): ?>
             <div class="bg-white shadow-sm rounded-xl border border-gray-100 p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                    <h2 class="text-sm font-semibold text-gray-900">Manage this application</h2>
-                    <p class="text-xs text-gray-500">
-                        Use the quick actions to move this application forward and optionally notify the applicant by email.
-                    </p>
+                    <h2 class="text-sm font-semibold text-gray-900">Post-acceptance actions</h2>
+                    <p class="text-xs text-gray-500">Enroll the learner in their course or revert this acceptance.</p>
                 </div>
                 <div class="flex flex-wrap gap-2">
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 hover:border-blue-500 hover:bg-blue-50 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="under_review">
-                        <span class="dashicons dashicons-visibility text-xs mr-1"></span>
-                        Mark as Under Review
-                    </button>
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-emerald-500 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="accepted">
-                        <span class="dashicons dashicons-yes-alt text-xs mr-1"></span>
-                        Accept Application
-                    </button>
-                    <?php
-                    // Only show enrollment / revert actions once an application is accepted
-                    if ($application['status'] === 'accepted') :
-                        global $wpdb;
-                        $student_id = !empty($application['student_id']) ? (int) $application['student_id'] : 0;
-                        $has_enrollments = false;
-                        if ($student_id > 0) {
-                            $enrollment_count = $wpdb->get_var($wpdb->prepare(
-                                "SELECT COUNT(*) FROM {$wpdb->prefix}nds_student_enrollments WHERE student_id = %d",
-                                $student_id
-                            ));
-                            $has_enrollments = $enrollment_count > 0;
-                        }
-
-                        // If there is a learner but no enrollments yet, offer a manual "Enroll in Course" action
-                        if ($student_id > 0 && !$has_enrollments) :
-                    ?>
-                            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_manual_enroll_from_application&application_id=' . intval($application['id'])), 'nds_manual_enroll_' . intval($application['id'])); ?>"
-                               class="inline-flex items-center px-3 py-2 rounded-lg border border-blue-500 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100"
-                               onclick="return confirm('This will enroll the student in the course(s) from their application. Continue?');">
-                                <span class="dashicons dashicons-groups text-xs mr-1"></span>
-                                Enroll in Course
-                            </a>
-                    <?php
-                        endif;
-
-                        // If a learner record exists at all, offer a "Revert to Applicant" action
-                        if ($student_id > 0) :
-                    ?>
-                            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_revert_student_from_application&application_id=' . intval($application['id'])), 'nds_revert_student_' . intval($application['id'])); ?>"
-                               class="inline-flex items-center px-3 py-2 rounded-lg border border-red-500 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100"
-                               onclick="return confirm('This will delete the learner record and any enrollments, and return this person to applicant-only. Continue?');">
-                                <span class="dashicons dashicons-undo text-xs mr-1"></span>
-                                Revert to Applicant
-                            </a>
-                    <?php
-                        endif;
-                    endif;
-                    ?>
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-red-400 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="rejected">
-                        <span class="dashicons dashicons-dismiss text-xs mr-1"></span>
-                        Reject Application
-                    </button>
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-amber-400 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="waitlisted">
-                        <span class="dashicons dashicons-clock text-xs mr-1"></span>
-                        Waitlist
-                    </button>
+                    <?php if (!$has_enrollments): ?>
+                        <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_manual_enroll_from_application&application_id=' . intval($application['id'])), 'nds_manual_enroll_' . intval($application['id'])); ?>"
+                           class="inline-flex items-center px-3 py-2 rounded-lg border border-blue-500 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100"
+                           onclick="return confirm('This will enroll the student in the course(s) from their application. Continue?');">
+                            <span class="dashicons dashicons-groups text-xs mr-1"></span>
+                            Enroll in Course
+                        </a>
+                    <?php endif; ?>
+                    <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_revert_student_from_application&application_id=' . intval($application['id'])), 'nds_revert_student_' . intval($application['id'])); ?>"
+                       class="inline-flex items-center px-3 py-2 rounded-lg border border-red-500 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100"
+                       onclick="return confirm('This will delete the learner record and any enrollments, and return this person to applicant-only. Continue?');">
+                        <span class="dashicons dashicons-undo text-xs mr-1"></span>
+                        Revert to Applicant
+                    </a>
                 </div>
             </div>
+            <?php endif; ?>
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <!-- Application Info -->
@@ -1461,27 +1606,31 @@ function nds_view_application_details($application_id) {
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="submitted">Submitted</option>
                                 <option value="under_review">Under Review</option>
+                                <option value="waitlisted">Waitlisted</option>
+                                <option value="conditional_offer">Conditional Offer</option>
+                                <option value="offer_made">Offer Made</option>
                                 <option value="accepted">Accepted</option>
+                                <option value="declined">Declined</option>
+                                <option value="withdrawn">Withdrawn</option>
                                 <option value="rejected">Rejected</option>
+                                <option value="expired">Expired</option>
                             </select>
                         </div>
 
                         <div id="rejection-reason-wrap" class="hidden">
-                            <label for="reject_reason" class="block text-sm font-semibold text-gray-900 mb-2">Rejection reason</label>
+                            <label for="reject_reason" id="reason-label" class="block text-sm font-semibold text-gray-900 mb-2">Reason</label>
                             <select name="reject_reason" id="reject_reason"
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="">Select reason</option>
-                                <?php foreach (nds_get_rejection_reason_options() as $reason_key => $reason_label): ?>
-                                    <option value="<?php echo esc_attr($reason_key); ?>"><?php echo esc_html($reason_label); ?></option>
-                                <?php endforeach; ?>
                             </select>
                         </div>
 
                         <div>
                             <label for="notes" class="block text-sm font-semibold text-gray-900 mb-2">Notes</label>
-                            <textarea name="notes" id="notes" rows="3"
-                                      class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                      placeholder="Add any review notes or context for this decision..."></textarea>
+                            <select name="notes" id="notes"
+                                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
+                                <option value="">Select a note</option>
+                            </select>
                         </div>
 
                         <div class="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
@@ -1503,63 +1652,67 @@ function nds_view_application_details($application_id) {
     </div>
 
     <script>
+    window.NDS_STATUS_REASONS = <?php echo wp_json_encode(nds_get_status_reason_options_map()); ?>;
+    window.NDS_STATUS_NOTES   = <?php echo wp_json_encode(nds_get_status_note_options_map()); ?>;
     document.addEventListener('DOMContentLoaded', function() {
         const statusModal = document.getElementById('status-modal');
         const updateButtons = document.querySelectorAll('.update-status-btn');
         const quickStatusButtons = document.querySelectorAll('.nds-quick-status-btn');
-
-        // #region agent log: DOMContentLoaded modal check
-        fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                sessionId: 'debug-session',
-                runId: 'details-dom-ready',
-                hypothesisId: 'H_modal_2',
-                location: 'applicants-management.php:DOMContentLoaded',
-                message: 'DOMContentLoaded - modal check',
-                data: {
-                    hasStatusModal: !!statusModal,
-                    updateButtonsCount: updateButtons.length,
-                    quickButtonsCount: quickStatusButtons.length
-                },
-                timestamp: Date.now()
-            })
-        }).catch(() => {});
-        // #endregion
 
         // Ensure modal is attached directly to <body> so it centers over the full viewport
         if (statusModal && statusModal.parentElement !== document.body) {
             document.body.appendChild(statusModal);
         }
 
-        function openStatusModal(id, status) {
-            const idField = document.getElementById('modal-application-id');
+        function applyReasonField() {
             const statusField = document.getElementById('new_status');
             const reasonWrap = document.getElementById('rejection-reason-wrap');
             const reasonField = document.getElementById('reject_reason');
+            const reasonLabel = document.getElementById('reason-label');
+            const notesField = document.getElementById('notes');
+            if (!statusField || !reasonWrap || !reasonField) return;
 
-            // #region agent log: openStatusModal called
-            fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sessionId: 'debug-session',
-                    runId: 'details-open-modal',
-                    hypothesisId: 'H_modal_3',
-                    location: 'applicants-management.php:openStatusModal',
-                    message: 'openStatusModal called',
-                    data: {
-                        id,
-                        status,
-                        hasStatusModal: !!statusModal,
-                        hasIdField: !!idField,
-                        hasStatusField: !!statusField
-                    },
-                    timestamp: Date.now()
-                })
-            }).catch(() => {});
-            // #endregion
+            const reasonMap = (window.NDS_STATUS_REASONS || {});
+            const opts = reasonMap[statusField.value];
+
+            if (opts && Object.keys(opts).length) {
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+                Object.keys(opts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = key;
+                    o.textContent = opts[key];
+                    reasonField.appendChild(o);
+                });
+                if (reasonLabel) {
+                    const labelMap = { rejected:'Rejection reason', declined:'Decline reason', waitlisted:'Waitlist reason', withdrawn:'Withdrawal reason', expired:'Expiry reason' };
+                    reasonLabel.textContent = labelMap[statusField.value] || 'Reason';
+                }
+                reasonWrap.classList.remove('hidden');
+                reasonField.required = true;
+            } else {
+                reasonWrap.classList.add('hidden');
+                reasonField.required = false;
+                reasonField.value = '';
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+            }
+
+            // Populate notes dropdown for current status
+            if (notesField && notesField.tagName === 'SELECT') {
+                const notesMap = (window.NDS_STATUS_NOTES || {});
+                const noteOpts = notesMap[statusField.value] || {};
+                notesField.innerHTML = '<option value="">Select a note</option>';
+                Object.keys(noteOpts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = noteOpts[key];
+                    o.textContent = noteOpts[key];
+                    notesField.appendChild(o);
+                });
+            }
+        }
+
+        function openStatusModal(id, status) {
+            const idField = document.getElementById('modal-application-id');
+            const statusField = document.getElementById('new_status');
 
             if (idField) {
                 idField.value = id;
@@ -1568,60 +1721,13 @@ function nds_view_application_details($application_id) {
                 statusField.value = status;
             }
 
-            if (statusField && reasonWrap && reasonField) {
-                if (statusField.value === 'rejected') {
-                    reasonWrap.classList.remove('hidden');
-                    reasonField.required = true;
-                } else {
-                    reasonWrap.classList.add('hidden');
-                    reasonField.required = false;
-                    reasonField.value = '';
-                }
-            }
+            applyReasonField();
 
             if (statusModal) {
                 statusModal.classList.remove('hidden');
                 statusModal.classList.add('flex', 'items-center', 'justify-center');
                 statusModal.style.display = 'flex';
                 document.body.style.overflow = 'hidden';
-
-                // #region agent log: modal shown attempt
-                const computedStyle = window.getComputedStyle(statusModal);
-                fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sessionId: 'debug-session',
-                        runId: 'details-open-modal',
-                        hypothesisId: 'H_modal_4',
-                        location: 'applicants-management.php:openStatusModal-after',
-                        message: 'After trying to show modal',
-                        data: {
-                            display: computedStyle.display,
-                            visibility: computedStyle.visibility,
-                            zIndex: computedStyle.zIndex,
-                            hasHiddenClass: statusModal.classList.contains('hidden')
-                        },
-                        timestamp: Date.now()
-                    })
-                }).catch(() => {});
-                // #endregion
-            } else {
-                // #region agent log: modal not found
-                fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sessionId: 'debug-session',
-                        runId: 'details-open-modal',
-                        hypothesisId: 'H_modal_5',
-                        location: 'applicants-management.php:openStatusModal',
-                        message: 'statusModal is null',
-                        data: { id, status },
-                        timestamp: Date.now()
-                    })
-                }).catch(() => {});
-                // #endregion
             }
         }
 
@@ -1639,20 +1745,7 @@ function nds_view_application_details($application_id) {
 
         const newStatusField = document.getElementById('new_status');
         if (newStatusField) {
-            newStatusField.addEventListener('change', function() {
-                const reasonWrap = document.getElementById('rejection-reason-wrap');
-                const reasonField = document.getElementById('reject_reason');
-                if (!reasonWrap || !reasonField) return;
-
-                if (newStatusField.value === 'rejected') {
-                    reasonWrap.classList.remove('hidden');
-                    reasonField.required = true;
-                } else {
-                    reasonWrap.classList.add('hidden');
-                    reasonField.required = false;
-                    reasonField.value = '';
-                }
-            });
+            newStatusField.addEventListener('change', applyReasonField);
         }
 
         if (statusModal) {
@@ -1682,6 +1775,10 @@ function nds_view_application_details($application_id) {
  */
 function nds_update_application_status($application_id, $new_status, $notes = '', $notify_applicant = false) {
     global $wpdb;
+
+    // Values resolved during accepted-flow to append to application update safely
+    $resolved_course_id_for_update = 0;
+    $resolved_program_id_for_update = 0;
     
     // #region agent log: status update entry - capture course_name BEFORE update
     $forms_table = $wpdb->prefix . 'nds_application_forms';
@@ -1844,13 +1941,11 @@ function nds_update_application_status($application_id, $new_status, $notes = ''
             }
 
             if ($resolved_course_id > 0) {
-                $update_data['course_id'] = $resolved_course_id;
-                $update_formats[] = '%d';
+                $resolved_course_id_for_update = $resolved_course_id;
             }
 
             if ($resolved_program_id > 0) {
-                $update_data['program_id'] = $resolved_program_id;
-                $update_formats[] = '%d';
+                $resolved_program_id_for_update = $resolved_program_id;
             }
         }
     }
@@ -1873,6 +1968,16 @@ function nds_update_application_status($application_id, $new_status, $notes = ''
         $update_data['semester_id'] = $semester_id;
         $update_formats[] = '%d'; // for academic_year_id
         $update_formats[] = '%d'; // for semester_id
+    }
+
+    if ($resolved_course_id_for_update > 0) {
+        $update_data['course_id'] = $resolved_course_id_for_update;
+        $update_formats[] = '%d';
+    }
+
+    if ($resolved_program_id_for_update > 0) {
+        $update_data['program_id'] = $resolved_program_id_for_update;
+        $update_formats[] = '%d';
     }
     
     $result = $wpdb->update(
@@ -2047,6 +2152,64 @@ function nds_update_application_status($application_id, $new_status, $notes = ''
                 // via manual registration submission in the learner portal.
             }
         }
+
+        // Keep legacy form status aligned with workflow status used by admin/staff dashboards.
+        $forms_status_map = array(
+            'submitted'         => 'pending',
+            'under_review'      => 'reviewed',
+            'waitlisted'        => 'reviewed',
+            'conditional_offer' => 'reviewed',
+            'offer_made'        => 'reviewed',
+            'accepted'          => 'accepted',
+            'declined'          => 'rejected',
+            'withdrawn'         => 'rejected',
+            'rejected'          => 'rejected',
+            'expired'           => 'rejected',
+        );
+
+        if (isset($forms_status_map[$new_status])) {
+            $wpdb->update(
+                $wpdb->prefix . 'nds_application_forms',
+                array('status' => $forms_status_map[$new_status]),
+                array('application_id' => $application_id),
+                array('%s'),
+                array('%d')
+            );
+        }
+
+        if ($new_status === 'accepted' && function_exists('nds_move_application_files_to_student')) {
+            nds_move_application_files_to_student($application_id);
+        }
+
+        // Optionally notify the applicant via email about this status change
+        if ($notify_applicant) {
+            $application = $wpdb->get_row($wpdb->prepare("\n                SELECT \n                    a.application_no,\n                    a.status,\n                    af.full_name,\n                    af.email\n                FROM {$wpdb->prefix}nds_applications a\n                LEFT JOIN {$wpdb->prefix}nds_application_forms af ON a.id = af.application_id\n                WHERE a.id = %d\n            ", $application_id), ARRAY_A);
+
+            if ($application && !empty($application['email'])) {
+                $site_name   = wp_specialchars_decode(get_bloginfo('name'), ENT_QUOTES);
+                $status_label = ucfirst(str_replace('_', ' ', $new_status));
+                $subject    = sprintf(
+                    '[%s] Your application %s status has been updated',
+                    $site_name,
+                    $application['application_no']
+                );
+
+                $message  = "Hi " . ($application['full_name'] ?: 'there') . ",\n\n";
+                $message .= "The status of your application (" . $application['application_no'] . ") has been updated to: " . $status_label . ".\n\n";
+                if (!empty($notes)) {
+                    $message .= "Notes from our admissions team:\n" . $notes . "\n\n";
+                }
+                $message .= "If you have any questions, please reply to this email or contact the admissions office.\n\n";
+                $message .= "Regards,\n" . $site_name;
+
+                wp_mail($application['email'], $subject, $message);
+            }
+        }
+
+        $_SESSION['nds_status_update_success'] = $notify_applicant
+            ? 'Application status updated and the applicant has been emailed.'
+            : 'Application status updated successfully!';
+        return true;
     } elseif ($should_enroll && $current_status === 'accepted') {
         // Status is already 'accepted' but update returned false/0 - still try to enroll (might have been missed)
         // This handles the case where enrollment failed previously
@@ -2720,6 +2883,112 @@ function nds_get_rejection_reason_options() {
 }
 
 /**
+ * Reason options keyed by status. Statuses not present here do not require a reason.
+ */
+function nds_get_status_reason_options_map() {
+    return array(
+        'rejected' => nds_get_rejection_reason_options(),
+        'declined' => array(
+            'accepted_other_offer' => 'Applicant accepted another offer',
+            'fees_too_high'        => 'Fees too high / financial reasons',
+            'changed_mind'         => 'Changed mind about studying',
+            'personal_reasons'     => 'Personal reasons',
+            'other'                => 'Other reason',
+        ),
+        'waitlisted' => array(
+            'capacity_full'        => 'Program capacity is full',
+            'pending_documents'    => 'Awaiting supporting documents',
+            'pending_review'       => 'Awaiting further review',
+            'other'                => 'Other reason',
+        ),
+        'withdrawn' => array(
+            'applicant_request'    => 'Withdrawn at applicant request',
+            'no_response'          => 'No response from applicant',
+            'duplicate'            => 'Duplicate application',
+            'other'                => 'Other reason',
+        ),
+        'expired' => array(
+            'deadline_passed'      => 'Application deadline passed',
+            'no_response'          => 'No response from applicant',
+            'other'                => 'Other reason',
+        ),
+    );
+}
+
+function nds_get_reason_options_for_status($status) {
+    $map = nds_get_status_reason_options_map();
+    return isset($map[$status]) ? $map[$status] : array();
+}
+
+/**
+ * Predefined note templates per status. JS populates the notes dropdown from this map.
+ */
+function nds_get_status_note_options_map() {
+    $generic = array(
+        'reviewed_documents'   => 'Reviewed all submitted documents.',
+        'awaiting_documents'   => 'Awaiting outstanding documents from applicant.',
+        'contacted_applicant'  => 'Contacted applicant for follow-up.',
+        'no_response'          => 'No response received from applicant.',
+        'manual_decision'      => 'Decision made after manual review.',
+    );
+
+    return array(
+        'submitted'         => $generic,
+        'under_review'      => array(
+            'initial_review'      => 'Initial review in progress.',
+            'awaiting_documents'  => 'Awaiting outstanding documents from applicant.',
+            'verifying_records'   => 'Verifying academic records.',
+            'panel_review'        => 'Forwarded to selection panel for review.',
+        ),
+        'waitlisted'        => array(
+            'capacity_full'       => 'Program capacity is full — placed on waitlist.',
+            'pending_documents'   => 'Waitlisted pending receipt of documents.',
+            'pending_review'      => 'Waitlisted pending further review.',
+        ),
+        'conditional_offer' => array(
+            'pending_results'     => 'Conditional offer pending final results.',
+            'pending_documents'   => 'Conditional offer pending submission of documents.',
+            'pending_payment'     => 'Conditional offer pending payment.',
+        ),
+        'offer_made'        => array(
+            'standard_offer'      => 'Standard offer made — awaiting acceptance.',
+            'with_scholarship'    => 'Offer made with scholarship/financial aid.',
+            'with_deposit'        => 'Offer made — deposit required to confirm.',
+        ),
+        'accepted'          => array(
+            'meets_requirements'  => 'Applicant meets all entry requirements.',
+            'documents_verified'  => 'All supporting documents verified.',
+            'panel_approved'      => 'Approved by selection panel.',
+        ),
+        'declined'          => array(
+            'applicant_declined'  => 'Applicant declined the offer.',
+            'accepted_other'      => 'Applicant accepted offer elsewhere.',
+            'no_response'         => 'No response received from applicant.',
+        ),
+        'withdrawn'         => array(
+            'applicant_request'   => 'Withdrawn at applicant request.',
+            'duplicate'           => 'Duplicate application withdrawn.',
+            'no_response'         => 'No response received from applicant.',
+        ),
+        'rejected'          => array(
+            'requirements_not_met' => 'Applicant does not meet entry requirements.',
+            'documents_incomplete' => 'Supporting documents incomplete.',
+            'capacity_full'        => 'Rejected due to capacity constraints.',
+            'panel_decision'       => 'Rejection decided by selection panel.',
+        ),
+        'expired'           => array(
+            'deadline_passed'     => 'Application deadline passed without action.',
+            'no_response'         => 'No response received from applicant.',
+        ),
+    );
+}
+
+function nds_get_note_options_for_status($status) {
+    $map = nds_get_status_note_options_map();
+    return isset($map[$status]) ? $map[$status] : array();
+}
+
+/**
  * Deletion guard for applications.
  * Only unlinked, non-progressed applications may be deleted.
  */
@@ -2755,32 +3024,59 @@ function nds_can_delete_application($application_id, &$failure_reason = '') {
  */
 function nds_bulk_update_application_status($application_ids, $new_status) {
     global $wpdb;
-    
-    $placeholders = implode(',', array_fill(0, count($application_ids), '%d'));
-    $application_ids[] = $new_status;
-    $application_ids[] = get_current_user_id();
-    $application_ids[] = current_time('mysql');
-    $application_ids[] = current_time('mysql');
-    
-    $result = $wpdb->query($wpdb->prepare("
-        UPDATE {$wpdb->prefix}nds_applications 
-        SET status = %s, decided_by = %d, decision_at = %s, updated_at = %s
-        WHERE id IN ($placeholders)
-    ", $application_ids));
-    
+
+    $ids = array_values(array_filter(array_map('intval', (array) $application_ids), function ($id) {
+        return $id > 0;
+    }));
+
+    if (empty($ids)) {
+        $_SESSION['nds_status_update_error'] = 'No valid applications selected for bulk update.';
+        return false;
+    }
+
+    $placeholders = implode(',', array_fill(0, count($ids), '%d'));
+    $params = array_merge(
+        array($new_status, get_current_user_id(), current_time('mysql'), current_time('mysql')),
+        $ids
+    );
+
+    $result = $wpdb->query($wpdb->prepare(
+        "UPDATE {$wpdb->prefix}nds_applications
+         SET status = %s, decided_by = %d, decision_at = %s, updated_at = %s
+         WHERE id IN ($placeholders)",
+        $params
+    ));
+
     if ($result !== false) {
+        // Keep legacy application_forms status aligned for views that still read it.
+        $forms_status_map = array(
+            'submitted'         => 'pending',
+            'under_review'      => 'reviewed',
+            'waitlisted'        => 'reviewed',
+            'conditional_offer' => 'reviewed',
+            'offer_made'        => 'reviewed',
+            'accepted'          => 'accepted',
+            'declined'          => 'rejected',
+            'withdrawn'         => 'rejected',
+            'rejected'          => 'rejected',
+            'expired'           => 'rejected',
+        );
+
+        if (isset($forms_status_map[$new_status])) {
+            $wpdb->query($wpdb->prepare(
+                "UPDATE {$wpdb->prefix}nds_application_forms SET status = %s WHERE application_id IN ($placeholders)",
+                array_merge(array($forms_status_map[$new_status]), $ids)
+            ));
+        }
+
         // For bulk accepted updates, move files for each application
         if ($new_status === 'accepted' && function_exists('nds_move_application_files_to_student')) {
-            foreach ($application_ids as $maybe_id) {
-                // Only the first N entries are IDs; later entries are metadata (status, user, timestamps)
-                if (!is_int($maybe_id)) {
-                    break;
-                }
-                nds_move_application_files_to_student($maybe_id);
+            foreach ($ids as $application_id) {
+                nds_move_application_files_to_student((int) $application_id);
             }
         }
 
-        $_SESSION['nds_status_update_success'] = 'Successfully updated ' . $result . ' application(s)!';
+        $_SESSION['nds_status_update_success'] = 'Successfully updated ' . count($ids) . ' application(s)!';
         return true;
     } else {
         $_SESSION['nds_status_update_error'] = 'Failed to update applications: ' . $wpdb->last_error;
@@ -3043,3 +3339,720 @@ function nds_convert_application_to_student($application_id) {
         });
     }
 }
+
+// =============================================================================
+// ADMIN: NEW APPLICATION FORM
+// =============================================================================
+
+/**
+ * Render the "New Application" form for admins to submit on behalf of a student.
+ * Accessible at: admin.php?page=nds-applicants&action=new
+ */
+function nds_render_admin_new_application_form() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    global $wpdb;
+
+    // Enqueue styles
+    $plugin_dir = plugin_dir_path(dirname(__FILE__));
+    $css_file   = $plugin_dir . 'assets/css/frontend.css';
+    if (file_exists($css_file)) {
+        wp_enqueue_style(
+            'nds-tailwindcss-new-app',
+            plugin_dir_url(dirname(__FILE__)) . 'assets/css/frontend.css',
+            array(), filemtime($css_file), 'all'
+        );
+    }
+
+    // Load dropdowns
+    $faculties       = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_faculties ORDER BY name ASC", ARRAY_A);
+    $programs        = $wpdb->get_results("SELECT id, name, faculty_id FROM {$wpdb->prefix}nds_programs ORDER BY name ASC", ARRAY_A);
+    $qualifications  = $wpdb->get_results("SELECT id, name, program_id FROM {$wpdb->prefix}nds_courses ORDER BY name ASC", ARRAY_A);
+
+    $nonce = wp_create_nonce('nds_admin_create_application');
+    ?>
+    <div class="wrap nds-tailwind-wrapper bg-gray-50 pb-32" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin-left: -20px; padding-left: 20px; margin-top: -20px;">
+        <!-- Header -->
+        <div class="bg-white shadow-sm border-b border-gray-200">
+            <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-6">
+                    <div class="flex items-center space-x-4">
+                        <div class="w-12 h-12 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center">
+                            <span class="dashicons dashicons-clipboard text-white text-2xl"></span>
+                        </div>
+                        <div>
+                            <h1 class="text-2xl font-bold text-gray-900">New Application</h1>
+                            <p class="text-gray-600 text-sm">Submit an application on behalf of a student.</p>
+                        </div>
+                    </div>
+                    <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants')); ?>"
+                       class="inline-flex items-center px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium">
+                        <span class="dashicons dashicons-arrow-left-alt2 text-sm mr-1"></span>
+                        Back to applications
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data" class="space-y-6">
+                <?php wp_nonce_field('nds_admin_create_application', 'nds_admin_app_nonce'); ?>
+                <input type="hidden" name="action" value="nds_admin_create_application">
+
+                <!-- Course Selection -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Course Selection</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Faculty <span class="text-red-500">*</span></label>
+                            <select name="faculty_id" id="adm_faculty_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select faculty</option>
+                                <?php foreach ($faculties as $fac): ?>
+                                    <option value="<?php echo esc_attr($fac['id']); ?>"><?php echo esc_html($fac['name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Program <span class="text-red-500">*</span></label>
+                            <select name="program_id" id="adm_program_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select program</option>
+                                <?php foreach ($programs as $prog): ?>
+                                    <option value="<?php echo esc_attr($prog['id']); ?>" data-faculty="<?php echo esc_attr($prog['faculty_id']); ?>">
+                                        <?php echo esc_html($prog['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Qualification (Course) <span class="text-red-500">*</span></label>
+                            <select name="course_id" id="adm_course_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select qualification</option>
+                                <?php foreach ($qualifications as $qual): ?>
+                                    <option value="<?php echo esc_attr($qual['id']); ?>" data-program="<?php echo esc_attr($qual['program_id']); ?>"
+                                        data-name="<?php echo esc_attr($qual['name']); ?>">
+                                        <?php echo esc_html($qual['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <input type="hidden" name="course_name" id="adm_course_name">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Level</label>
+                            <select name="level" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select level</option>
+                                <option value="NQF Level 1">NQF Level 1</option>
+                                <option value="NQF Level 2">NQF Level 2</option>
+                                <option value="NQF Level 3">NQF Level 3</option>
+                                <option value="NQF Level 4">NQF Level 4</option>
+                                <option value="NQF Level 5">NQF Level 5</option>
+                                <option value="NQF Level 6">NQF Level 6</option>
+                                <option value="NQF Level 7">NQF Level 7</option>
+                                <option value="NQF Level 8">NQF Level 8</option>
+                                <option value="NQF Level 9">NQF Level 9</option>
+                                <option value="NQF Level 10">NQF Level 10</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Personal Details -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Personal Details</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="full_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ID / Passport Number <span class="text-red-500">*</span></label>
+                            <input type="text" name="id_number" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Date of Birth <span class="text-red-500">*</span></label>
+                            <input type="date" name="date_of_birth" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Gender <span class="text-red-500">*</span></label>
+                            <select name="gender" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select gender</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                                <option value="Other">Other</option>
+                                <option value="Prefer not to say">Prefer not to say</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Marital Status</label>
+                            <select name="marital_status" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select status</option>
+                                <option value="Single">Single</option>
+                                <option value="Married">Married</option>
+                                <option value="Divorced">Divorced</option>
+                                <option value="Widowed">Widowed</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Nationality</label>
+                            <input type="text" name="nationality" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. South African">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Country of Birth</label>
+                            <input type="text" name="country_of_birth" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. South Africa">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Contact & Address -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Contact &amp; Address</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+                            <input type="email" name="email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Cell / Phone <span class="text-red-500">*</span></label>
+                            <input type="text" name="cell_no" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Street Address <span class="text-red-500">*</span></label>
+                            <textarea name="street_address" required rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">City <span class="text-red-500">*</span></label>
+                            <input type="text" name="city" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Province <span class="text-red-500">*</span></label>
+                            <input type="text" name="province" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Postal Code <span class="text-red-500">*</span></label>
+                            <input type="text" name="postal_code" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Person Responsible for Fees -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Person Responsible for Fees</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="responsible_full_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Relationship</label>
+                            <input type="text" name="relationship" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. Parent, Spouse, Self">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ID Number <span class="text-red-500">*</span></label>
+                            <input type="text" name="responsible_id_number" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Phone <span class="text-red-500">*</span></label>
+                            <input type="text" name="responsible_phone" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+                            <input type="email" name="responsible_email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Occupation <span class="text-red-500">*</span></label>
+                            <input type="text" name="occupation" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+                            <textarea name="responsible_street_address" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">City</label>
+                            <input type="text" name="responsible_city" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Province</label>
+                            <input type="text" name="responsible_province" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                            <input type="text" name="responsible_postal_code" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
+                            <input type="text" name="company_name" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Work Telephone</label>
+                            <input type="text" name="work_telephone" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Work Email</label>
+                            <input type="email" name="work_email" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Emergency Contact -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Emergency Contact</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="emergency_full_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Relationship</label>
+                            <input type="text" name="emergency_relationship" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Phone <span class="text-red-500">*</span></label>
+                            <input type="text" name="emergency_phone" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+                            <input type="email" name="emergency_email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+                            <textarea name="emergency_street_address" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">City</label>
+                            <input type="text" name="emergency_city" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Province</label>
+                            <input type="text" name="emergency_province" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                            <input type="text" name="emergency_postal_code" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Educational Background -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Educational Background</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Highest Grade Completed <span class="text-red-500">*</span></label>
+                            <input type="text" name="highest_grade" required placeholder="e.g. Grade 12" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Year Passed <span class="text-red-500">*</span></label>
+                            <input type="text" name="year_passed" required placeholder="e.g. 2020" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">School Attended <span class="text-red-500">*</span></label>
+                            <input type="text" name="school_attended" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">School Location</label>
+                            <input type="text" name="school_location" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Other Qualifications</label>
+                            <textarea name="other_qualifications" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="List any other qualifications"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Year of Completion</label>
+                            <input type="text" name="year_completion" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Languages -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Languages</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Home Language</label>
+                            <input type="text" name="home_language" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <?php
+                        $lang_fields = array(
+                            array('label' => 'English Writing',  'name' => 'english_write'),
+                            array('label' => 'English Reading',  'name' => 'english_read'),
+                            array('label' => 'English Speaking', 'name' => 'english_speak'),
+                        );
+                        foreach ($lang_fields as $lf): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($lf['label']); ?></label>
+                            <select name="<?php echo esc_attr($lf['name']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="Good">Good</option>
+                                <option value="Average">Average</option>
+                                <option value="Poor">Poor</option>
+                            </select>
+                        </div>
+                        <?php endforeach; ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Other Language</label>
+                            <input type="text" name="other_language" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <?php
+                        $other_lang_fields = array(
+                            array('label' => 'Other Language Writing',  'name' => 'other_language_write'),
+                            array('label' => 'Other Language Reading',  'name' => 'other_language_read'),
+                            array('label' => 'Other Language Speaking', 'name' => 'other_language_speak'),
+                        );
+                        foreach ($other_lang_fields as $lf): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($lf['label']); ?></label>
+                            <select name="<?php echo esc_attr($lf['name']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="Good">Good</option>
+                                <option value="Average">Average</option>
+                                <option value="Poor">Poor</option>
+                            </select>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Medical -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Medical Information</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <?php
+                        $medical_fields = array(
+                            array('name' => 'physical_illness',    'label' => 'Physical illness / disability?', 'specify' => 'specify_physical_illness'),
+                            array('name' => 'food_allergies',      'label' => 'Food allergies?',                'specify' => 'specify_food_allergies'),
+                            array('name' => 'chronic_medication',  'label' => 'Chronic medication?',            'specify' => 'specify_chronic_medication'),
+                            array('name' => 'pregnant_or_planning','label' => 'Pregnant or planning?',          'specify' => null),
+                            array('name' => 'smoke',               'label' => 'Do you smoke?',                  'specify' => null),
+                        );
+                        foreach ($medical_fields as $mf): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($mf['label']); ?></label>
+                            <select name="<?php echo esc_attr($mf['name']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="No">No</option>
+                                <option value="Yes">Yes</option>
+                            </select>
+                            <?php if ($mf['specify']): ?>
+                            <input type="text" name="<?php echo esc_attr($mf['specify']); ?>" placeholder="If yes, please specify" class="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                            <?php endif; ?>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Supporting Documents -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Supporting Documents <span class="text-xs font-normal text-gray-500">(PDF, optional)</span></h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <?php
+                        $doc_fields = array(
+                            'id_passport_applicant'   => "Applicant's ID / Passport",
+                            'id_passport_responsible' => "Responsible Person's ID / Passport",
+                            'saqa_certificate'        => 'SAQA Certificate',
+                            'study_permit'            => 'Study Permit',
+                            'parent_spouse_id'        => 'Parent / Spouse ID',
+                            'latest_results'          => 'Latest Results',
+                            'proof_residence'         => 'Proof of Residence',
+                            'highest_grade_cert'      => 'Highest Grade Certificate',
+                            'proof_medical_aid'       => 'Proof of Medical Aid',
+                        );
+                        foreach ($doc_fields as $field => $label): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($label); ?></label>
+                            <input type="file" name="<?php echo esc_attr($field); ?>" accept=".pdf"
+                                   class="w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Motivation -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Motivation Letter</h2>
+                    </div>
+                    <div class="p-6">
+                        <textarea name="motivation_letter" rows="5" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="Why does the applicant want to enrol in this course?"></textarea>
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <div class="flex items-center justify-end gap-4">
+                    <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants')); ?>"
+                       class="inline-flex items-center px-5 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium">
+                        Cancel
+                    </a>
+                    <button type="submit"
+                            class="inline-flex items-center px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm">
+                        <span class="dashicons dashicons-yes-alt text-sm mr-1"></span>
+                        Submit Application
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        var facultySelect  = document.getElementById('adm_faculty_id');
+        var programSelect  = document.getElementById('adm_program_id');
+        var courseSelect   = document.getElementById('adm_course_id');
+        var courseNameInput = document.getElementById('adm_course_name');
+
+        function filterPrograms() {
+            var facId = facultySelect.value;
+            var opts = programSelect.querySelectorAll('option');
+            var firstVisible = '';
+            opts.forEach(function(opt) {
+                if (!opt.value) return;
+                var show = !facId || opt.dataset.faculty === facId;
+                opt.style.display = show ? '' : 'none';
+                if (show && !firstVisible) firstVisible = opt.value;
+            });
+            // Reset program if current selection is hidden
+            if (facId && programSelect.value && programSelect.querySelector('option[value="' + programSelect.value + '"]').style.display === 'none') {
+                programSelect.value = '';
+            }
+            filterCourses();
+        }
+
+        function filterCourses() {
+            var progId = programSelect.value;
+            var opts = courseSelect.querySelectorAll('option');
+            opts.forEach(function(opt) {
+                if (!opt.value) return;
+                var show = !progId || opt.dataset.program === progId;
+                opt.style.display = show ? '' : 'none';
+            });
+            if (progId && courseSelect.value && courseSelect.querySelector('option[value="' + courseSelect.value + '"]').style.display === 'none') {
+                courseSelect.value = '';
+                courseNameInput.value = '';
+            }
+        }
+
+        function updateCourseName() {
+            var sel = courseSelect.options[courseSelect.selectedIndex];
+            courseNameInput.value = sel ? (sel.dataset.name || sel.text) : '';
+        }
+
+        facultySelect.addEventListener('change', filterPrograms);
+        programSelect.addEventListener('change', filterCourses);
+        courseSelect.addEventListener('change', updateCourseName);
+    })();
+    </script>
+    <?php
+}
+
+/**
+ * Handle admin submission of a new application.
+ * Hooked to: admin_post_nds_admin_create_application
+ */
+function nds_handle_admin_create_application() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    // Verify nonce
+    if (!isset($_POST['nds_admin_app_nonce']) || !wp_verify_nonce($_POST['nds_admin_app_nonce'], 'nds_admin_create_application')) {
+        wp_die('Security check failed. Please try again.');
+    }
+
+    global $wpdb;
+
+    $course_id   = intval($_POST['course_id'] ?? 0);
+    $course_name = sanitize_text_field($_POST['course_name'] ?? '');
+
+    if (!$course_id) {
+        wp_die('Please select a qualification before submitting.');
+    }
+    if (empty($course_name)) {
+        // Fallback: fetch from DB
+        $course_row  = $wpdb->get_var($wpdb->prepare("SELECT name FROM {$wpdb->prefix}nds_courses WHERE id = %d", $course_id));
+        $course_name = $course_row ? $course_row : 'Unknown Course';
+    }
+
+    // Handle file uploads (optional – same logic as frontend, but skipped if not provided)
+    $plugin_dir     = plugin_dir_path(dirname(__FILE__));
+    $temp_upload_dir = $plugin_dir . 'public/temp-uploads/';
+    if (!file_exists($temp_upload_dir)) {
+        wp_mkdir_p($temp_upload_dir);
+    }
+
+    $file_fields = array(
+        'id_passport_applicant', 'id_passport_responsible', 'saqa_certificate',
+        'study_permit', 'parent_spouse_id', 'latest_results', 'proof_residence',
+        'highest_grade_cert', 'proof_medical_aid',
+    );
+    $temp_uploaded_files = array();
+    foreach ($file_fields as $field) {
+        if (isset($_FILES[$field]) && $_FILES[$field]['error'] === UPLOAD_ERR_OK) {
+            $file     = $_FILES[$field];
+            $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if ($file_ext !== 'pdf') { continue; }
+            $unique_filename = $field . '_' . time() . '_' . uniqid() . '.pdf';
+            $temp_file_path  = $temp_upload_dir . $unique_filename;
+            if (move_uploaded_file($file['tmp_name'], $temp_file_path)) {
+                $temp_uploaded_files[$field] = array(
+                    'temp_path'     => $temp_file_path,
+                    'original_name' => sanitize_file_name(pathinfo($file['name'], PATHINFO_FILENAME)),
+                    'unique_name'   => $unique_filename,
+                );
+            }
+        }
+    }
+
+    // Build form data (same fields as nds_handle_application_form_submission)
+    $data = array(
+        'level'                      => sanitize_text_field($_POST['level'] ?? ''),
+        'course_id'                  => $course_id,
+        'course_name'                => $course_name,
+        'full_name'                  => sanitize_text_field($_POST['full_name'] ?? ''),
+        'id_number'                  => sanitize_text_field($_POST['id_number'] ?? ''),
+        'date_of_birth'              => sanitize_text_field($_POST['date_of_birth'] ?? ''),
+        'gender'                     => sanitize_text_field($_POST['gender'] ?? ''),
+        'nationality'                => mb_substr(sanitize_text_field($_POST['nationality'] ?? ''), 0, 100),
+        'country_of_birth'           => sanitize_text_field($_POST['country_of_birth'] ?? ''),
+        'marital_status'             => sanitize_text_field($_POST['marital_status'] ?? ''),
+        'street_address'             => sanitize_textarea_field($_POST['street_address'] ?? ''),
+        'city'                       => sanitize_text_field($_POST['city'] ?? ''),
+        'postal_code'                => sanitize_text_field($_POST['postal_code'] ?? ''),
+        'province'                   => sanitize_text_field($_POST['province'] ?? ''),
+        'cell_no'                    => sanitize_text_field($_POST['cell_no'] ?? ''),
+        'email'                      => sanitize_email($_POST['email'] ?? ''),
+        'responsible_full_name'      => sanitize_text_field($_POST['responsible_full_name'] ?? ''),
+        'relationship'               => sanitize_text_field($_POST['relationship'] ?? ''),
+        'responsible_id_number'      => sanitize_text_field($_POST['responsible_id_number'] ?? ''),
+        'responsible_phone'          => sanitize_text_field($_POST['responsible_phone'] ?? ''),
+        'responsible_email'          => sanitize_email($_POST['responsible_email'] ?? ''),
+        'responsible_street_address' => sanitize_textarea_field($_POST['responsible_street_address'] ?? ''),
+        'responsible_city'           => sanitize_text_field($_POST['responsible_city'] ?? ''),
+        'responsible_postal_code'    => sanitize_text_field($_POST['responsible_postal_code'] ?? ''),
+        'responsible_province'       => sanitize_text_field($_POST['responsible_province'] ?? ''),
+        'occupation'                 => sanitize_text_field($_POST['occupation'] ?? ''),
+        'company_name'               => sanitize_text_field($_POST['company_name'] ?? ''),
+        'work_telephone'             => sanitize_text_field($_POST['work_telephone'] ?? ''),
+        'work_email'                 => sanitize_email($_POST['work_email'] ?? ''),
+        'emergency_full_name'        => sanitize_text_field($_POST['emergency_full_name'] ?? ''),
+        'emergency_relationship'     => sanitize_text_field($_POST['emergency_relationship'] ?? ''),
+        'emergency_phone'            => sanitize_text_field($_POST['emergency_phone'] ?? ''),
+        'emergency_email'            => sanitize_email($_POST['emergency_email'] ?? ''),
+        'emergency_street_address'   => sanitize_textarea_field($_POST['emergency_street_address'] ?? ''),
+        'emergency_city'             => sanitize_text_field($_POST['emergency_city'] ?? ''),
+        'emergency_postal_code'      => sanitize_text_field($_POST['emergency_postal_code'] ?? ''),
+        'emergency_province'         => sanitize_text_field($_POST['emergency_province'] ?? ''),
+        'highest_grade'              => sanitize_text_field($_POST['highest_grade'] ?? ''),
+        'year_passed'                => sanitize_text_field($_POST['year_passed'] ?? ''),
+        'school_attended'            => sanitize_text_field($_POST['school_attended'] ?? ''),
+        'school_location'            => sanitize_text_field($_POST['school_location'] ?? ''),
+        'other_qualifications'       => sanitize_text_field($_POST['other_qualifications'] ?? ''),
+        'year_completion'            => sanitize_text_field($_POST['year_completion'] ?? ''),
+        'home_language'              => sanitize_text_field($_POST['home_language'] ?? ''),
+        'english_write'              => sanitize_text_field($_POST['english_write'] ?? 'Good'),
+        'english_read'               => sanitize_text_field($_POST['english_read'] ?? 'Good'),
+        'english_speak'              => sanitize_text_field($_POST['english_speak'] ?? 'Good'),
+        'other_language'             => sanitize_text_field($_POST['other_language'] ?? ''),
+        'other_language_write'       => sanitize_text_field($_POST['other_language_write'] ?? 'Good'),
+        'other_language_read'        => sanitize_text_field($_POST['other_language_read'] ?? 'Good'),
+        'other_language_speak'       => sanitize_text_field($_POST['other_language_speak'] ?? 'Good'),
+        'physical_illness'           => sanitize_text_field($_POST['physical_illness'] ?? 'No'),
+        'specify_physical_illness'   => sanitize_textarea_field($_POST['specify_physical_illness'] ?? ''),
+        'food_allergies'             => sanitize_text_field($_POST['food_allergies'] ?? 'No'),
+        'specify_food_allergies'     => sanitize_textarea_field($_POST['specify_food_allergies'] ?? ''),
+        'chronic_medication'         => sanitize_text_field($_POST['chronic_medication'] ?? 'No'),
+        'specify_chronic_medication' => sanitize_textarea_field($_POST['specify_chronic_medication'] ?? ''),
+        'pregnant_or_planning'       => sanitize_text_field($_POST['pregnant_or_planning'] ?? 'No'),
+        'smoke'                      => sanitize_text_field($_POST['smoke'] ?? 'No'),
+        'id_passport_applicant'      => '',
+        'id_passport_responsible'    => '',
+        'saqa_certificate'           => '',
+        'study_permit'               => '',
+        'parent_spouse_id'           => '',
+        'latest_results'             => '',
+        'proof_residence'            => '',
+        'highest_grade_cert'         => '',
+        'proof_medical_aid'          => '',
+        'declaration'                => 1, // Admin is submitting on behalf, so declaration is implied
+        'motivation_letter'          => sanitize_textarea_field($_POST['motivation_letter'] ?? ''),
+        'status'                     => 'pending',
+    );
+
+    // Set temp file paths for uploaded docs
+    foreach ($temp_uploaded_files as $field => $info) {
+        $data[$field] = $info['unique_name'];
+    }
+
+    $wpdb->query('START TRANSACTION');
+    try {
+        $forms_table = $wpdb->prefix . 'nds_application_forms';
+        $inserted = $wpdb->insert($forms_table, $data);
+        if (!$inserted) {
+            throw new Exception('Failed to insert application form data: ' . $wpdb->last_error);
+        }
+        $application_form_id = $wpdb->insert_id;
+
+        $application_no = 'APP-' . date('Y') . '-' . str_pad($application_form_id, 6, '0', STR_PAD_LEFT);
+
+        // Resolve program / faculty from course
+        $course_info = $wpdb->get_row($wpdb->prepare(
+            "SELECT c.program_id, p.faculty_id
+             FROM {$wpdb->prefix}nds_courses c
+             JOIN {$wpdb->prefix}nds_programs p ON c.program_id = p.id
+             WHERE c.id = %d",
+            $course_id
+        ), ARRAY_A);
+        $program_id = $course_info ? $course_info['program_id'] : null;
+
+        $application_data = array(
+            'application_no' => $application_no,
+            'wp_user_id'     => get_current_user_id() ?: null,
+            'student_id'     => null,
+            'program_id'     => $program_id,
+            'course_id'      => $course_id,
+            'source'         => 'admin',
+            'status'         => 'submitted',
+            'submitted_at'   => current_time('mysql'),
+            'notes'          => 'Application submitted by admin on behalf of student',
+            'created_at'     => current_time('mysql'),
+        );
+
+        $app_inserted = $wpdb->insert($wpdb->prefix . 'nds_applications', $application_data);
+        if (!$app_inserted) {
+            throw new Exception('Failed to insert application record: ' . $wpdb->last_error);
+        }
+        $application_id = $wpdb->insert_id;
+
+        // Link form to application
+        $wpdb->update($forms_table, array('application_id' => $application_id), array('id' => $application_form_id));
+
+        $wpdb->query('COMMIT');
+
+        wp_redirect(admin_url('admin.php?page=nds-applicants&app_created=1'));
+        exit;
+    } catch (Exception $e) {
+        $wpdb->query('ROLLBACK');
+        // Clean up any uploaded temp files
+        foreach ($temp_uploaded_files as $info) {
+            if (file_exists($info['temp_path'])) {
+                @unlink($info['temp_path']);
+            }
+        }
+        wp_die('Error creating application: ' . esc_html($e->getMessage()));
+    }
+}
+add_action('admin_post_nds_admin_create_application', 'nds_handle_admin_create_application');

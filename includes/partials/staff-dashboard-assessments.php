@@ -12,11 +12,18 @@ $module_code_col = in_array('module_code', $module_columns, true)
     : (in_array('code', $module_columns, true) ? 'code' : null);
 $module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
 
+$assigned_module_ids = isset($assigned_module_ids) && is_array($assigned_module_ids)
+    ? array_values(array_map('intval', $assigned_module_ids))
+    : array();
 $course_ids = isset($course_ids) && is_array($course_ids) ? array_values(array_map('intval', $course_ids)) : array();
 $selected_assessment_id = isset($_GET['assessment_id']) ? (int) $_GET['assessment_id'] : 0;
 $selected_content_course_filter = isset($_GET['content_course_id']) ? (int) $_GET['content_course_id'] : 0;
 $selected_content_module_filter = isset($_GET['content_module_id']) ? (int) $_GET['content_module_id'] : 0;
 $selected_content_status_filter = isset($_GET['content_submission_status']) ? sanitize_key((string) wp_unslash($_GET['content_submission_status'])) : '';
+
+if (!empty($assigned_module_ids) && $selected_content_module_filter > 0 && !in_array($selected_content_module_filter, $assigned_module_ids, true)) {
+    $selected_content_module_filter = 0;
+}
 
 $assessments_tab_url = nds_staff_portal_tab_url('assessments');
 $content_filter_query = array();
@@ -34,7 +41,17 @@ $assessments_tab_filtered_url = !empty($content_filter_query)
     : $assessments_tab_url;
 
 $modules_for_form = array();
-if (!empty($course_ids)) {
+if (!empty($assigned_module_ids)) {
+    $placeholders = implode(',', array_fill(0, count($assigned_module_ids), '%d'));
+    $modules_for_form = $wpdb->get_results($wpdb->prepare(
+        "SELECT m.id, m.name, {$module_code_expr}, m.course_id, c.name AS course_name
+         FROM {$wpdb->prefix}nds_modules m
+         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
+         WHERE m.id IN ($placeholders)
+         ORDER BY c.name ASC, m.name ASC",
+        $assigned_module_ids
+    ), ARRAY_A);
+} elseif (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results($wpdb->prepare(
         "SELECT m.id, m.name, {$module_code_expr}, m.course_id, c.name AS course_name
@@ -48,16 +65,31 @@ if (!empty($course_ids)) {
 
 $assessments = array();
 if (!empty($course_ids)) {
-    $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
-    $assessments = $wpdb->get_results($wpdb->prepare(
-        "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
-         FROM {$wpdb->prefix}nds_assessments a
-         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
-         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
-         WHERE a.course_id IN ($placeholders)
-         ORDER BY a.created_at DESC",
-        $course_ids
-    ), ARRAY_A);
+    $course_placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
+
+    if (!empty($assigned_module_ids)) {
+        $module_placeholders = implode(',', array_fill(0, count($assigned_module_ids), '%d'));
+        $assessments = $wpdb->get_results($wpdb->prepare(
+            "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
+             FROM {$wpdb->prefix}nds_assessments a
+             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
+             LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
+             WHERE a.course_id IN ($course_placeholders)
+             AND a.module_id IN ($module_placeholders)
+             ORDER BY a.created_at DESC",
+            array_merge($course_ids, $assigned_module_ids)
+        ), ARRAY_A);
+    } else {
+        $assessments = $wpdb->get_results($wpdb->prepare(
+            "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
+             FROM {$wpdb->prefix}nds_assessments a
+             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
+             LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
+             WHERE a.course_id IN ($course_placeholders)
+             ORDER BY a.created_at DESC",
+            $course_ids
+        ), ARRAY_A);
+    }
 }
 
 $question_bank_items = $wpdb->get_results($wpdb->prepare(
@@ -92,13 +124,14 @@ if ($selected_assessment_id > 0) {
 }
 
 $quiz_attempt_rows = array();
+$quiz_pass_rate_rows = array();
 if (!empty($course_ids) && function_exists('nds_portal_ensure_quiz_attempts_table')) {
     $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
 
     $quiz_attempt_rows = $wpdb->get_results($wpdb->prepare(
         "SELECT qa.id, qa.attempt_no, qa.total_questions, qa.graded_questions, qa.correct_answers,
-                qa.score_percent, qa.submitted_at,
+                qa.score_percent, qa.submitted_at, qa.started_at, qa.ip_address,
                 st.student_number, st.first_name, st.last_name,
                 lc.id AS content_id, lc.title AS quiz_title, lc.min_grade_required,
                 c.name AS course_name,
@@ -112,6 +145,37 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_quiz_attempts_tabl
            AND qa.course_id IN ({$placeholders})
          ORDER BY qa.submitted_at DESC
          LIMIT 100",
+        array_merge(array((int) $staff_id), $course_ids)
+    ), ARRAY_A);
+
+    // Aggregated pass-rate per quiz (uses each student's BEST score per quiz so retries don't bias the rate down).
+    $quiz_pass_rate_rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT lc.id AS content_id,
+                lc.title AS quiz_title,
+                COALESCE(lc.min_grade_required, 50) AS pass_threshold,
+                c.name AS course_name,
+                m.name AS module_name,
+                COUNT(qa.id) AS total_attempts,
+                COUNT(DISTINCT qa.student_id) AS unique_students,
+                ROUND(AVG(qa.score_percent), 2) AS avg_score,
+                ROUND(MIN(qa.score_percent), 2) AS min_score,
+                ROUND(MAX(qa.score_percent), 2) AS max_score,
+                SUM(CASE WHEN best.best_score >= COALESCE(lc.min_grade_required, 50) THEN 1 ELSE 0 END) AS passed_students,
+                MAX(qa.submitted_at) AS last_submission
+         FROM {$quiz_attempts_table} qa
+         INNER JOIN {$wpdb->prefix}nds_lecturer_content lc ON lc.id = qa.content_id
+         LEFT JOIN {$wpdb->prefix}nds_courses c ON c.id = qa.course_id
+         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = qa.module_id
+         INNER JOIN (
+             SELECT content_id, student_id, MAX(score_percent) AS best_score
+             FROM {$quiz_attempts_table}
+             GROUP BY content_id, student_id
+         ) best ON best.content_id = qa.content_id AND best.student_id = qa.student_id
+         WHERE lc.staff_id = %d
+           AND qa.course_id IN ({$placeholders})
+           AND qa.score_percent IS NOT NULL
+         GROUP BY lc.id, lc.title, lc.min_grade_required, c.name, m.name
+         ORDER BY last_submission DESC",
         array_merge(array((int) $staff_id), $course_ids)
     ), ARRAY_A);
 }
@@ -387,6 +451,76 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submiss
     </div>
 
     <div class="bg-white rounded-lg border border-gray-200 p-5">
+        <h3 class="text-lg font-semibold text-gray-900 mb-3">Quiz Pass-Rate Statistics</h3>
+
+        <?php if (empty($quiz_pass_rate_rows)) : ?>
+            <p class="text-sm text-gray-600">No graded quiz attempts to summarise yet.</p>
+        <?php else : ?>
+            <div class="overflow-x-auto border border-gray-200 rounded-lg">
+                <table class="min-w-full divide-y divide-gray-200 text-sm">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-3 py-2 text-left">Quiz</th>
+                            <th class="px-3 py-2 text-left">Course / Module</th>
+                            <th class="px-3 py-2 text-right">Attempts</th>
+                            <th class="px-3 py-2 text-right">Students</th>
+                            <th class="px-3 py-2 text-right">Avg Score</th>
+                            <th class="px-3 py-2 text-right">Min / Max</th>
+                            <th class="px-3 py-2 text-right">Pass Rate</th>
+                            <th class="px-3 py-2 text-left">Last Attempt</th>
+                        </tr>
+                    </thead>
+                    <tbody class="divide-y divide-gray-100 bg-white">
+                        <?php foreach ($quiz_pass_rate_rows as $stat_row) :
+                            $unique_students = (int) ($stat_row['unique_students'] ?? 0);
+                            $passed_students = (int) ($stat_row['passed_students'] ?? 0);
+                            $pass_rate = $unique_students > 0
+                                ? round(($passed_students / $unique_students) * 100, 1)
+                                : 0;
+                            $rate_class = $pass_rate >= 75
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : ($pass_rate >= 50 ? 'bg-amber-100 text-amber-700' : 'bg-rose-100 text-rose-700');
+                            $threshold_display = (float) ($stat_row['pass_threshold'] ?? 50);
+                        ?>
+                            <tr>
+                                <td class="px-3 py-2">
+                                    <div class="font-medium text-gray-800"><?php echo esc_html($stat_row['quiz_title'] ?? 'Quiz'); ?></div>
+                                    <div class="text-xs text-gray-500">Pass mark: <?php echo esc_html(number_format($threshold_display, 1)); ?>%</div>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <div><?php echo esc_html($stat_row['course_name'] ?? '-'); ?></div>
+                                    <div class="text-xs text-gray-500"><?php echo esc_html($stat_row['module_name'] ?? '-'); ?></div>
+                                </td>
+                                <td class="px-3 py-2 text-right"><?php echo (int) ($stat_row['total_attempts'] ?? 0); ?></td>
+                                <td class="px-3 py-2 text-right"><?php echo (int) $unique_students; ?></td>
+                                <td class="px-3 py-2 text-right"><?php echo esc_html(number_format((float) ($stat_row['avg_score'] ?? 0), 2)); ?>%</td>
+                                <td class="px-3 py-2 text-right text-xs text-gray-600">
+                                    <?php echo esc_html(number_format((float) ($stat_row['min_score'] ?? 0), 1)); ?>%
+                                    /
+                                    <?php echo esc_html(number_format((float) ($stat_row['max_score'] ?? 0), 1)); ?>%
+                                </td>
+                                <td class="px-3 py-2 text-right">
+                                    <span class="inline-flex items-center gap-1 px-2 py-1 rounded text-xs font-semibold <?php echo esc_attr($rate_class); ?>">
+                                        <?php echo esc_html(number_format($pass_rate, 1)); ?>%
+                                    </span>
+                                    <div class="text-[11px] text-gray-500 mt-1"><?php echo (int) $passed_students; ?>/<?php echo (int) $unique_students; ?> students</div>
+                                </td>
+                                <td class="px-3 py-2 text-xs text-gray-600">
+                                    <?php
+                                        $last = $stat_row['last_submission'] ?? '';
+                                        echo $last ? esc_html(date_i18n('Y-m-d H:i', strtotime((string) $last))) : '-';
+                                    ?>
+                                </td>
+                            </tr>
+                        <?php endforeach; ?>
+                    </tbody>
+                </table>
+            </div>
+            <p class="text-[11px] text-gray-500 mt-2">Pass rate is based on each student's best score per quiz, compared to the quiz's minimum required grade.</p>
+        <?php endif; ?>
+    </div>
+
+    <div class="bg-white rounded-lg border border-gray-200 p-5">
         <h3 class="text-lg font-semibold text-gray-900 mb-3">Learner Quiz Attempts (Content Quizzes)</h3>
 
         <?php if (empty($quiz_attempt_rows)) : ?>
@@ -402,7 +536,9 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submiss
                             <th class="px-3 py-2 text-left">Attempt</th>
                             <th class="px-3 py-2 text-left">Score</th>
                             <th class="px-3 py-2 text-left">Status</th>
+                            <th class="px-3 py-2 text-left">Started</th>
                             <th class="px-3 py-2 text-left">Submitted</th>
+                            <th class="px-3 py-2 text-left">IP</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-gray-100 bg-white">
@@ -444,7 +580,11 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submiss
                                         <span class="text-[11px] font-semibold px-2 py-1 rounded bg-amber-100 text-amber-700">Pending</span>
                                     <?php endif; ?>
                                 </td>
+                                <td class="px-3 py-2 text-xs text-gray-600">
+                                    <?php echo !empty($qa_row['started_at']) ? esc_html(date_i18n('Y-m-d H:i', strtotime((string) $qa_row['started_at']))) : '-'; ?>
+                                </td>
                                 <td class="px-3 py-2"><?php echo esc_html(date_i18n('Y-m-d H:i', strtotime((string) ($qa_row['submitted_at'] ?? 'now')))); ?></td>
+                                <td class="px-3 py-2 text-xs text-gray-600 font-mono"><?php echo esc_html($qa_row['ip_address'] ?? '-'); ?></td>
                             </tr>
                         <?php endforeach; ?>
                     </tbody>

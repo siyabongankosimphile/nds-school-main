@@ -17,9 +17,27 @@ $module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "
 $notice = isset($_GET['content_notice']) ? sanitize_text_field(wp_unslash($_GET['content_notice'])) : '';
 $error = isset($_GET['content_error']) ? sanitize_text_field(wp_unslash($_GET['content_error'])) : '';
 
-$course_ids = function_exists('nds_staff_get_lecturer_course_ids') ? nds_staff_get_lecturer_course_ids($staff_id) : array();
+$assigned_module_ids = isset($assigned_module_ids) && is_array($assigned_module_ids)
+    ? array_values(array_map('intval', $assigned_module_ids))
+    : array();
+$course_ids = isset($course_ids) && is_array($course_ids)
+    ? array_values(array_map('intval', $course_ids))
+    : (function_exists('nds_staff_get_lecturer_course_ids') ? nds_staff_get_lecturer_course_ids($staff_id) : array());
 $modules_for_form = array();
-if (!empty($course_ids)) {
+if (!empty($assigned_module_ids)) {
+    $placeholders = implode(',', array_fill(0, count($assigned_module_ids), '%d'));
+    $modules_for_form = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT m.id, m.name, {$module_code_expr}, c.id AS course_id, c.name AS course_name
+             FROM {$wpdb->prefix}nds_modules m
+             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
+             WHERE m.id IN ($placeholders)
+             ORDER BY c.name ASC, m.name ASC",
+            $assigned_module_ids
+        ),
+        ARRAY_A
+    );
+} elseif (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results(
         $wpdb->prepare(
@@ -34,17 +52,7 @@ if (!empty($course_ids)) {
     );
 }
 
-$courses_for_form = $wpdb->get_results(
-    $wpdb->prepare(
-        "SELECT c.id, c.name, c.code
-         FROM {$wpdb->prefix}nds_courses c
-         INNER JOIN {$wpdb->prefix}nds_course_lecturers cl ON cl.course_id = c.id
-         WHERE cl.lecturer_id = %d
-         ORDER BY c.name ASC",
-        $staff_id
-    ),
-    ARRAY_A
-);
+$courses_for_form = isset($courses_taught) && is_array($courses_taught) ? $courses_taught : array();
 
 $items = $wpdb->get_results(
     $wpdb->prepare(

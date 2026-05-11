@@ -488,10 +488,10 @@ function nds_module_management_page()
                                     </td>
                                     <td>
                                         <div style="display: flex; flex-wrap: wrap; gap: 6px;">
-                                            <button type="button" class="button button-small" onclick="ndsOpenEditModuleModal(<?php echo intval($module['id']); ?>, <?php echo wp_json_encode($module['display_code']); ?>, <?php echo wp_json_encode($module['name']); ?>, <?php echo wp_json_encode($module['type'] ?? 'theory'); ?>, <?php echo intval($module['display_hours']); ?>, <?php echo intval($module['nqf_level'] ?? 0); ?>)">
+                                            <button type="button" class="button button-small" onclick='ndsOpenEditModuleModal(<?php echo intval($module['id']); ?>, <?php echo wp_json_encode($module['display_code']); ?>, <?php echo wp_json_encode($module['name']); ?>, <?php echo wp_json_encode($module['type'] ?? 'theory'); ?>, <?php echo intval($module['display_hours']); ?>, <?php echo intval($module['nqf_level'] ?? 0); ?>)'>
                                                 <i class="fas fa-pen"></i> Edit
                                             </button>
-                                            <button type="button" class="button button-small" onclick="ndsOpenModuleLecturerModal(<?php echo intval($module['id']); ?>, <?php echo wp_json_encode($module['name']); ?>, <?php echo wp_json_encode($module['lecturers'] ?? array()); ?>)">
+                                            <button type="button" class="button button-small" onclick='ndsOpenModuleLecturerModal(<?php echo intval($module['id']); ?>, <?php echo wp_json_encode($module['name']); ?>, <?php echo wp_json_encode($module['lecturers'] ?? array()); ?>)'>
                                                 <i class="fas fa-user-plus"></i> Lecturers
                                             </button>
                                             <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" onsubmit="return confirm('Delete this module? This will also remove module lecturer assignments.');" style="margin: 0;">
@@ -709,30 +709,33 @@ function nds_module_management_page()
     });
 
     // Handle form submission
-    document.getElementById('nds-module-lecturer-form').addEventListener('submit', function(e) {
-        e.preventDefault();
-        
-        const formData = new FormData(this);
-        
-        fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
-            method: 'POST',
-            body: formData
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                const nextUrl = new URL(window.location.href);
-                nextUrl.searchParams.set('module_assignments_updated', '1');
-                window.location.href = nextUrl.toString();
-            } else {
-                alert('Error: ' + (data.data ? data.data : 'Unknown error'));
-            }
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            alert('Error assigning lecturers');
+    const moduleLecturerForm = document.getElementById('nds-module-lecturer-form');
+    if (moduleLecturerForm) {
+        moduleLecturerForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+
+            const formData = new FormData(this);
+
+            fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    const nextUrl = new URL(window.location.href);
+                    nextUrl.searchParams.set('module_assignments_updated', '1');
+                    window.location.href = nextUrl.toString();
+                } else {
+                    alert('Error: ' + (data.data ? data.data : 'Unknown error'));
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Error assigning lecturers');
+            });
         });
-    });
+    }
     </script>
 
     <style>

@@ -2251,6 +2251,24 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     if (quizAttemptForm) {
+        // Notify the server that the student has opened the quiz so we can record started_at + IP.
+        (function () {
+            try {
+                const startPayload = new URLSearchParams();
+                startPayload.append('action', 'nds_portal_start_quiz_attempt');
+                const nonceField = quizAttemptForm.querySelector('input[name="nonce"]');
+                const contentField = quizAttemptForm.querySelector('input[name="content_id"]');
+                if (nonceField) startPayload.append('nonce', nonceField.value);
+                if (contentField) startPayload.append('content_id', contentField.value);
+                fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: startPayload.toString()
+                }).catch(function () {});
+            } catch (e) {}
+        })();
+
         function buildQuizReviewHtml(attemptData) {
             const hasAutoScore = attemptData.score_percent !== null && attemptData.score_percent !== undefined && attemptData.graded_questions > 0;
             const statusText = attemptData.passed === true ? 'Pass' : (attemptData.passed === false ? 'Fail' : 'Pending review');
@@ -2258,32 +2276,67 @@ document.addEventListener('DOMContentLoaded', function() {
                 ? 'bg-emerald-100 text-emerald-700'
                 : (attemptData.passed === false ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700');
 
-            const questionBlocks = quizAttemptForm.querySelectorAll('.nds-quiz-question');
+            const reviewRows = Array.isArray(attemptData.review) ? attemptData.review : [];
             let answerRows = '';
-            questionBlocks.forEach(function (block) {
-                const titleEl = block.querySelector('.nds-quiz-question-title');
-                const title = titleEl ? titleEl.textContent.trim() : 'Question';
-                const type = block.getAttribute('data-question-type') || 'multiple_choice';
-                let answerText = 'No answer provided';
 
-                if (type === 'multiple_choice') {
-                    const checked = block.querySelector('input[type="radio"]:checked');
-                    if (checked) {
-                        const label = checked.closest('label');
-                        answerText = label ? label.textContent.trim() : checked.value;
-                    }
-                } else {
-                    const textArea = block.querySelector('textarea');
-                    if (textArea && textArea.value.trim() !== '') {
-                        answerText = textArea.value.trim();
-                    }
-                }
+            if (reviewRows.length > 0) {
+                reviewRows.forEach(function (row, i) {
+                    const isMc = row.type === 'multiple_choice';
+                    const isCorrect = row.is_correct === true;
+                    const isWrong = row.is_correct === false;
+                    const rowBorder = isMc ? (isCorrect ? 'border-emerald-300 bg-emerald-50' : (isWrong ? 'border-rose-300 bg-rose-50' : 'border-indigo-100 bg-white')) : 'border-indigo-100 bg-white';
+                    const badgeHtml = isMc
+                        ? (isCorrect
+                            ? '<span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Correct</span>'
+                            : (isWrong
+                                ? '<span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-rose-100 text-rose-700">Incorrect</span>'
+                                : '<span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-gray-100 text-gray-600">Not answered</span>'))
+                        : '<span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-700">Awaiting review</span>';
+                    const studentAnsDisplay = (row.student_answer || '').toString().trim() === ''
+                        ? '<em class="text-gray-400">No answer</em>'
+                        : (isMc
+                            ? '<strong>' + ndsEscapeHtml(row.student_answer) + '.</strong> ' + ndsEscapeHtml(row.student_answer_text || '')
+                            : ndsEscapeHtml(row.student_answer));
+                    const correctAnsDisplay = isMc
+                        ? '<strong>' + ndsEscapeHtml(row.correct_answer || '') + '.</strong> ' + ndsEscapeHtml(row.correct_answer_text || '')
+                        : ndsEscapeHtml(row.correct_answer || '');
 
-                answerRows += '<div class="bg-white border border-indigo-100 rounded-md p-3">'
-                    + '<div class="text-xs font-semibold text-indigo-900 mb-1">' + title.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'
-                    + '<div class="text-sm text-gray-700 whitespace-pre-wrap">' + answerText.replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>'
-                    + '</div>';
-            });
+                    answerRows += '<div class="rounded-md border ' + rowBorder + ' p-3">'
+                        + '<div class="flex items-start justify-between gap-2 mb-2">'
+                        +   '<div class="text-xs font-semibold text-indigo-900">Q' + (i + 1) + '. ' + ndsEscapeHtml(row.question || '') + '</div>'
+                        +   badgeHtml
+                        + '</div>'
+                        + '<div class="text-xs text-gray-500">Your answer</div>'
+                        + '<div class="text-sm text-gray-800 mb-2 whitespace-pre-wrap">' + studentAnsDisplay + '</div>'
+                        + (isMc || row.correct_answer ? '<div class="text-xs text-gray-500">Correct answer</div><div class="text-sm text-emerald-800 font-medium whitespace-pre-wrap">' + correctAnsDisplay + '</div>' : '')
+                        + '</div>';
+                });
+            } else {
+                // Fallback: show only student's own answers (legacy path)
+                const questionBlocks = quizAttemptForm.querySelectorAll('.nds-quiz-question');
+                questionBlocks.forEach(function (block) {
+                    const titleEl = block.querySelector('.nds-quiz-question-title');
+                    const title = titleEl ? titleEl.textContent.trim() : 'Question';
+                    const type = block.getAttribute('data-question-type') || 'multiple_choice';
+                    let answerText = 'No answer provided';
+                    if (type === 'multiple_choice') {
+                        const checked = block.querySelector('input[type="radio"]:checked');
+                        if (checked) {
+                            const label = checked.closest('label');
+                            answerText = label ? label.textContent.trim() : checked.value;
+                        }
+                    } else {
+                        const textArea = block.querySelector('textarea');
+                        if (textArea && textArea.value.trim() !== '') {
+                            answerText = textArea.value.trim();
+                        }
+                    }
+                    answerRows += '<div class="bg-white border border-indigo-100 rounded-md p-3">'
+                        + '<div class="text-xs font-semibold text-indigo-900 mb-1">' + ndsEscapeHtml(title) + '</div>'
+                        + '<div class="text-sm text-gray-700 whitespace-pre-wrap">' + ndsEscapeHtml(answerText) + '</div>'
+                        + '</div>';
+                });
+            }
 
             const scoreText = hasAutoScore ? (attemptData.score_percent + '%') : 'Pending manual grading';
 
