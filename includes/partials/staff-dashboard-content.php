@@ -37,19 +37,6 @@ if (!empty($assigned_module_ids)) {
         ),
         ARRAY_A
     );
-} elseif (!empty($course_ids)) {
-    $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
-    $modules_for_form = $wpdb->get_results(
-        $wpdb->prepare(
-            "SELECT m.id, m.name, {$module_code_expr}, c.id AS course_id, c.name AS course_name
-             FROM {$wpdb->prefix}nds_modules m
-             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
-             WHERE m.course_id IN ($placeholders)
-             ORDER BY c.name ASC, m.name ASC",
-            $course_ids
-        ),
-        ARRAY_A
-    );
 }
 
 $courses_for_form = isset($courses_taught) && is_array($courses_taught) ? $courses_taught : array();

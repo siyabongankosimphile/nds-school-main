@@ -84,11 +84,11 @@ function nds_parse_staff_lecturer_assignments($request_data) {
             return new WP_Error('invalid_assignment', 'Each lecturer assignment must include faculty, program, and qualification.');
         }
 
-        $assignments[$course_id] = array(
+        $assignments[] = array(
             'faculty_id' => $faculty_id,
             'program_id' => $program_id,
             'course_id' => $course_id,
-                'module_id' => isset($module_ids[$index]) ? intval($module_ids[$index]) : 0,
+            'module_id' => isset($module_ids[$index]) ? intval($module_ids[$index]) : 0,
         );
     }
 
@@ -115,9 +115,24 @@ function nds_sync_staff_lecturer_assignments($staff_id, array $lecturer_assignme
         ));
     }
 
-        // Sync module assignments
+        // Sync module assignments — only clear modules for courses currently being managed,
+        // preserving Module Management AJAX assignments for any other courses.
         $module_link_table = $wpdb->prefix . 'nds_module_lecturers';
-        $wpdb->delete($module_link_table, array('lecturer_id' => $staff_id), array('%d'));
+        $synced_course_ids = array_unique(array_filter(array_map(function($a) {
+            return intval($a['course_id']);
+        }, $lecturer_assignments)));
+
+        if (!empty($synced_course_ids)) {
+            $course_id_csv = implode(',', $synced_course_ids);
+            $wpdb->query($wpdb->prepare(
+                "DELETE ml FROM {$module_link_table} ml
+                 INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = ml.module_id
+                 WHERE ml.lecturer_id = %d AND m.course_id IN ({$course_id_csv})",
+                $staff_id
+            ));
+        } else {
+            $wpdb->delete($module_link_table, array('lecturer_id' => $staff_id), array('%d'));
+        }
 
         foreach ($lecturer_assignments as $assignment) {
             if (!empty($assignment['module_id']) && intval($assignment['module_id']) > 0) {
