@@ -12,11 +12,18 @@ $module_code_col = in_array('module_code', $module_columns, true)
     : (in_array('code', $module_columns, true) ? 'code' : null);
 $module_code_expr = $module_code_col ? "m.{$module_code_col} AS module_code" : "'' AS module_code";
 
+$assigned_module_ids = isset($assigned_module_ids) && is_array($assigned_module_ids)
+    ? array_values(array_map('intval', $assigned_module_ids))
+    : array();
 $course_ids = isset($course_ids) && is_array($course_ids) ? array_values(array_map('intval', $course_ids)) : array();
 $selected_assessment_id = isset($_GET['assessment_id']) ? (int) $_GET['assessment_id'] : 0;
 $selected_content_course_filter = isset($_GET['content_course_id']) ? (int) $_GET['content_course_id'] : 0;
 $selected_content_module_filter = isset($_GET['content_module_id']) ? (int) $_GET['content_module_id'] : 0;
 $selected_content_status_filter = isset($_GET['content_submission_status']) ? sanitize_key((string) wp_unslash($_GET['content_submission_status'])) : '';
+
+if (!empty($assigned_module_ids) && $selected_content_module_filter > 0 && !in_array($selected_content_module_filter, $assigned_module_ids, true)) {
+    $selected_content_module_filter = 0;
+}
 
 $assessments_tab_url = nds_staff_portal_tab_url('assessments');
 $content_filter_query = array();
@@ -34,7 +41,17 @@ $assessments_tab_filtered_url = !empty($content_filter_query)
     : $assessments_tab_url;
 
 $modules_for_form = array();
-if (!empty($course_ids)) {
+if (!empty($assigned_module_ids)) {
+    $placeholders = implode(',', array_fill(0, count($assigned_module_ids), '%d'));
+    $modules_for_form = $wpdb->get_results($wpdb->prepare(
+        "SELECT m.id, m.name, {$module_code_expr}, m.course_id, c.name AS course_name
+         FROM {$wpdb->prefix}nds_modules m
+         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
+         WHERE m.id IN ($placeholders)
+         ORDER BY c.name ASC, m.name ASC",
+        $assigned_module_ids
+    ), ARRAY_A);
+} elseif (!empty($course_ids)) {
     $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
     $modules_for_form = $wpdb->get_results($wpdb->prepare(
         "SELECT m.id, m.name, {$module_code_expr}, m.course_id, c.name AS course_name
@@ -48,16 +65,31 @@ if (!empty($course_ids)) {
 
 $assessments = array();
 if (!empty($course_ids)) {
-    $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
-    $assessments = $wpdb->get_results($wpdb->prepare(
-        "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
-         FROM {$wpdb->prefix}nds_assessments a
-         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
-         LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
-         WHERE a.course_id IN ($placeholders)
-         ORDER BY a.created_at DESC",
-        $course_ids
-    ), ARRAY_A);
+    $course_placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
+
+    if (!empty($assigned_module_ids)) {
+        $module_placeholders = implode(',', array_fill(0, count($assigned_module_ids), '%d'));
+        $assessments = $wpdb->get_results($wpdb->prepare(
+            "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
+             FROM {$wpdb->prefix}nds_assessments a
+             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
+             LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
+             WHERE a.course_id IN ($course_placeholders)
+             AND a.module_id IN ($module_placeholders)
+             ORDER BY a.created_at DESC",
+            array_merge($course_ids, $assigned_module_ids)
+        ), ARRAY_A);
+    } else {
+        $assessments = $wpdb->get_results($wpdb->prepare(
+            "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
+             FROM {$wpdb->prefix}nds_assessments a
+             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
+             LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
+             WHERE a.course_id IN ($course_placeholders)
+             ORDER BY a.created_at DESC",
+            $course_ids
+        ), ARRAY_A);
+    }
 }
 
 $question_bank_items = $wpdb->get_results($wpdb->prepare(
