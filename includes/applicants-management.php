@@ -107,6 +107,17 @@ function nds_applicants_dashboard() {
 
             $reason_note = 'Rejection reason: ' . $reason_options[$reject_reason];
             $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+        } else {
+            $reason_options = nds_get_reason_options_for_status($new_status);
+            if (!empty($reason_options)) {
+                if (empty($reject_reason) || !isset($reason_options[$reject_reason])) {
+                    $_SESSION['nds_status_update_error'] = 'Please select a reason for the chosen status before saving.';
+                    wp_redirect(admin_url('admin.php?page=nds-applicants'));
+                    exit;
+                }
+                $reason_note = ucfirst(str_replace('_', ' ', $new_status)) . ' reason: ' . $reason_options[$reject_reason];
+                $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+            }
         }
         
         // Debug logging
@@ -129,6 +140,25 @@ function nds_applicants_dashboard() {
     $filter_program_id = isset($_GET['filter_program_id']) ? max(0, intval($_GET['filter_program_id'])) : 0;
     $filter_faculty_id = isset($_GET['filter_faculty_id']) ? max(0, intval($_GET['filter_faculty_id'])) : 0;
     $filter_course_id = isset($_GET['filter_course_id']) ? max(0, intval($_GET['filter_course_id'])) : 0;
+    $filter_status    = isset($_GET['filter_status']) ? sanitize_text_field(wp_unslash($_GET['filter_status'])) : '';
+
+    $status_filter_options = array(
+        'submitted'         => 'Submitted',
+        'under_review'      => 'Under Review',
+        'waitlisted'        => 'Waitlisted',
+        'conditional_offer' => 'Conditional Offer',
+        'offer_made'        => 'Offer Made',
+        'accepted'          => 'Accepted',
+        'accepted_group'    => 'Accepted (Accepted + Offers)',
+        'declined'          => 'Declined',
+        'withdrawn'         => 'Withdrawn',
+        'rejected'          => 'Rejected',
+        'expired'           => 'Expired',
+    );
+
+    if ($filter_status !== '' && !isset($status_filter_options[$filter_status])) {
+        $filter_status = '';
+    }
 
     $where_clauses = array("a.status != 'converted_to_student'");
     $where_values = array();
@@ -147,6 +177,13 @@ function nds_applicants_dashboard() {
         $where_clauses[] = '(a.course_id = %d OR af.course_id = %d)';
         $where_values[] = $filter_course_id;
         $where_values[] = $filter_course_id;
+    }
+
+    if ($filter_status === 'accepted_group') {
+        $where_clauses[] = "a.status IN ('accepted','offer_made','conditional_offer')";
+    } elseif ($filter_status !== '') {
+        $where_clauses[] = 'a.status = %s';
+        $where_values[] = $filter_status;
     }
 
     $where_sql = implode(' AND ', $where_clauses);
@@ -261,6 +298,48 @@ function nds_applicants_dashboard() {
     $submitted_count      = count($submitted_list);
     $under_review_count   = count($under_review_list);
     $accepted_count       = count($accepted_list);
+
+    // Per-status counts for tabs
+    $status_counts = array();
+    foreach ($all_active_applications as $row) {
+        $st = $row['status'];
+        if (!isset($status_counts[$st])) { $status_counts[$st] = 0; }
+        $status_counts[$st]++;
+    }
+    $count_for = function($key) use ($status_counts) {
+        if ($key === '') { return array_sum($status_counts); }
+        if ($key === 'accepted_group') {
+            return (isset($status_counts['accepted']) ? $status_counts['accepted'] : 0)
+                 + (isset($status_counts['offer_made']) ? $status_counts['offer_made'] : 0)
+                 + (isset($status_counts['conditional_offer']) ? $status_counts['conditional_offer'] : 0);
+        }
+        return isset($status_counts[$key]) ? $status_counts[$key] : 0;
+    };
+
+    // Tabs definition (order matters)
+    $status_tabs = array(
+        ''               => array('label' => 'All',           'color' => 'blue'),
+        'submitted'      => array('label' => 'Submitted',     'color' => 'indigo'),
+        'under_review'   => array('label' => 'Under Review',  'color' => 'amber'),
+        'accepted_group' => array('label' => 'Accepted',      'color' => 'emerald'),
+        'waitlisted'     => array('label' => 'Waitlisted',    'color' => 'sky'),
+        'rejected'       => array('label' => 'Rejected',      'color' => 'red'),
+        'declined'       => array('label' => 'Declined',      'color' => 'rose'),
+        'withdrawn'      => array('label' => 'Withdrawn',     'color' => 'gray'),
+        'expired'        => array('label' => 'Expired',       'color' => 'gray'),
+    );
+
+    $tab_base_args = array_filter(array(
+        'page'              => 'nds-applicants',
+        'filter_program_id' => $filter_program_id ?: null,
+        'filter_faculty_id' => $filter_faculty_id ?: null,
+        'filter_course_id'  => $filter_course_id ?: null,
+    ));
+    $tab_url = function($status) use ($tab_base_args) {
+        $args = $tab_base_args;
+        if ($status !== '') { $args['filter_status'] = $status; }
+        return admin_url('admin.php?' . http_build_query($args));
+    };
     ?>
     <style>
         /* Ensure the WordPress footer doesn't overlap our custom dashboard */
@@ -280,6 +359,11 @@ function nds_applicants_dashboard() {
                             <h1 class="text-3xl font-bold text-gray-900">Applications Management</h1>
                             <p class="text-gray-600 text-sm sm:text-base">
                                 Review, update, and convert applications into student records.
+                                <?php if ($filter_status !== ''): ?>
+                                    <span class="inline-flex items-center ml-2 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 text-blue-700">
+                                        Filtered: <?php echo esc_html($status_filter_options[$filter_status]); ?>
+                                    </span>
+                                <?php endif; ?>
                             </p>
                         </div>
                     </div>
@@ -288,19 +372,7 @@ function nds_applicants_dashboard() {
         </div>
 
         <!-- Main Content -->
-        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-            <!-- Application actions / quick controls -->
-            <div class="bg-white shadow-sm rounded-xl border border-gray-100 p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                <div>
-                    <h2 class="text-sm font-semibold text-gray-900">Manage this application</h2>
-                    <p class="text-xs text-gray-500">
-                        Use the quick actions to move this application forward and optionally notify the applicant by email.
-                    </p>
-                </div>
-                <div class="flex flex-wrap gap-2">
-                    <p class="text-xs text-gray-500">Select applications from the list below to manage them.</p>
-                </div>
-            </div>
+        <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
             <!-- Flash messages -->
         <?php if (isset($_SESSION['nds_status_update_success'])): ?>
                 <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center">
@@ -317,70 +389,31 @@ function nds_applicants_dashboard() {
                 </div>
             <?php unset($_SESSION['nds_status_update_error']); ?>
         <?php endif; ?>
-        
-            <!-- KPI Cards -->
-            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
-                <!-- Total Applications -->
-                <div onclick="openStatModal('total')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Total Applications</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($total_applications); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-blue-50 flex items-center justify-center">
-                            <i class="fas fa-clipboard-list text-blue-600 text-xl"></i>
-                        </div>
-                    </div>
-                </div>
 
-                <!-- Submitted -->
-                <div onclick="openStatModal('submitted')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Submitted</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($submitted_count); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-indigo-50 flex items-center justify-center">
-                            <i class="fas fa-file-signature text-indigo-600 text-xl"></i>
-                        </div>
-                    </div>
+            <!-- Status Tabs -->
+            <style>
+                .nds-tab { display:inline-flex; align-items:center; gap:0.5rem; padding:0.625rem 1rem; font-size:0.875rem; font-weight:500; color:#4b5563; border-bottom:2px solid transparent; white-space:nowrap; text-decoration:none; transition: color .15s, border-color .15s; }
+                .nds-tab:hover { color:#111827; border-bottom-color:#d1d5db; }
+                .nds-tab.is-active { color:#1d4ed8; border-bottom-color:#2563eb; }
+                .nds-tab-badge { display:inline-flex; align-items:center; justify-content:center; min-width:1.5rem; height:1.25rem; padding:0 0.5rem; border-radius:9999px; font-size:0.6875rem; font-weight:600; background:#f3f4f6; color:#374151; }
+                .nds-tab.is-active .nds-tab-badge { background:#dbeafe; color:#1d4ed8; }
+                .nds-tabs-wrap { background:#fff; border:1px solid #f3f4f6; border-radius:0.75rem; box-shadow:0 1px 2px 0 rgb(0 0 0 / 0.05); padding:0 0.5rem; overflow-x:auto; }
+                .nds-tabs-inner { display:flex; align-items:center; gap:0.25rem; min-width:max-content; }
+            </style>
+            <nav class="nds-tabs-wrap" aria-label="Filter by status">
+                <div class="nds-tabs-inner">
+                    <?php foreach ($status_tabs as $tab_key => $tab): ?>
+                        <?php $is_active = ($filter_status === $tab_key); ?>
+                        <a href="<?php echo esc_url($tab_url($tab_key)); ?>"
+                           class="nds-tab<?php echo $is_active ? ' is-active' : ''; ?>"
+                           aria-current="<?php echo $is_active ? 'page' : 'false'; ?>">
+                            <span><?php echo esc_html($tab['label']); ?></span>
+                            <span class="nds-tab-badge"><?php echo number_format_i18n($count_for($tab_key)); ?></span>
+                        </a>
+                    <?php endforeach; ?>
                 </div>
-
-                <!-- Under Review -->
-                <div onclick="openStatModal('review')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Under Review</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($under_review_count); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-amber-50 flex items-center justify-center">
-                            <i class="fas fa-search text-amber-600 text-xl"></i>
-                        </div>
-                    </div>
-                </div>
+            </nav>
         
-                <!-- Accepted -->
-                <div onclick="openStatModal('accepted')" class="bg-white shadow-sm rounded-xl p-5 border border-gray-100 flex flex-col justify-between hover:bg-gray-50 transition-all duration-200 cursor-pointer group">
-                    <div class="flex items-center justify-between">
-                        <div>
-                            <p class="text-sm font-medium text-gray-500 group-hover:text-gray-700">Accepted</p>
-                            <p class="mt-2 text-2xl font-semibold text-gray-900">
-                                <?php echo number_format_i18n($accepted_count); ?>
-                            </p>
-                        </div>
-                        <div class="w-10 h-10 rounded-lg bg-emerald-50 flex items-center justify-center">
-                            <i class="fas fa-check-double text-emerald-600 text-xl"></i>
-                        </div>
-                    </div>
-                </div>
-            </div>
-            
             <!-- Applications table + filters -->
             <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
                 <div class="px-5 py-4 border-b border-gray-100 flex items-center justify-between">
@@ -390,34 +423,7 @@ function nds_applicants_dashboard() {
                     </div>
                 </div>
 
-                <div class="px-5 py-3 border-b border-gray-100 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                    <form method="post" id="bulk-actions-form" class="flex items-center gap-2">
-                        <?php wp_nonce_field('nds_bulk_action', 'nds_bulk_action_nonce'); ?>
-                        <select name="bulk_action" id="bulk-action-selector" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent">
-                            <option value="">Bulk actions</option>
-                            <option value="update_status">Update status</option>
-                            <option value="delete">Delete</option>
-                        </select>
-                        <select name="new_status" id="bulk-new-status" class="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent hidden" aria-label="Bulk new status">
-                            <option value="">Select status</option>
-                            <option value="submitted">Submitted</option>
-                            <option value="under_review">Under Review</option>
-                            <option value="waitlisted">Waitlisted</option>
-                            <option value="conditional_offer">Conditional Offer</option>
-                            <option value="offer_made">Offer Made</option>
-                            <option value="accepted">Accepted</option>
-                            <option value="declined">Declined</option>
-                            <option value="withdrawn">Withdrawn</option>
-                            <option value="rejected">Rejected</option>
-                            <option value="expired">Expired</option>
-                        </select>
-                        <button type="submit" id="bulk-action-apply"
-                                class="inline-flex items-center px-3 py-2 rounded-lg bg-gray-100 text-gray-600 text-xs font-medium hover:bg-gray-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                disabled>
-                            Apply
-                        </button>
-                    </form>
-
+                <div class="px-5 py-3 border-b border-gray-100 flex items-center justify-end">
                     <div class="text-xs text-gray-500">
                         Page <?php echo number_format_i18n($page); ?> of <?php echo number_format_i18n(max(1, ceil($total_count / $per_page))); ?>
                     </div>
@@ -426,6 +432,9 @@ function nds_applicants_dashboard() {
                 <div class="px-5 py-3 border-b border-gray-100 bg-gray-50">
                     <form method="get" class="grid grid-cols-1 md:grid-cols-4 gap-3 items-end">
                         <input type="hidden" name="page" value="nds-applicants">
+                        <?php if ($filter_status !== ''): ?>
+                            <input type="hidden" name="filter_status" value="<?php echo esc_attr($filter_status); ?>">
+                        <?php endif; ?>
                         <div>
                             <label for="filter_program_id" class="block text-xs font-medium text-gray-600 mb-1">Program</label>
                             <select id="filter_program_id" name="filter_program_id" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm">
@@ -470,9 +479,6 @@ function nds_applicants_dashboard() {
                     <table class="w-full divide-y divide-gray-200 text-sm">
                         <thead class="bg-gray-50">
                             <tr>
-                                <th class="px-5 py-2">
-                                    <input type="checkbox" id="select-all-applications" class="rounded border-gray-300">
-                                </th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">App #</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Name</th>
                                 <th class="px-5 py-2 text-left font-medium text-gray-500 text-xs uppercase tracking-wide">Email</th>
@@ -488,9 +494,6 @@ function nds_applicants_dashboard() {
                             <?php if (!empty($applications)): ?>
                         <?php foreach ($applications as $app): ?>
                         <tr>
-                                        <td class="px-5 py-2 align-top">
-                                            <input type="checkbox" name="application_ids[]" value="<?php echo $app['id']; ?>" form="bulk-actions-form" class="application-checkbox rounded border-gray-300">
-                                        </td>
                                         <td class="px-5 py-2 whitespace-nowrap text-gray-900 font-medium">
                                             <?php echo esc_html($app['application_no']); ?>
                                         </td>
@@ -546,7 +549,7 @@ function nds_applicants_dashboard() {
                         <?php endforeach; ?>
                             <?php else: ?>
                                 <tr>
-                                    <td colspan="10" class="px-5 py-6 text-center text-sm text-gray-500">
+                                    <td colspan="9" class="px-5 py-6 text-center text-sm text-gray-500">
                                         No applications found.
                                     </td>
                                 </tr>
@@ -577,6 +580,7 @@ function nds_applicants_dashboard() {
                                     'filter_program_id' => $filter_program_id,
                                     'filter_faculty_id' => $filter_faculty_id,
                                     'filter_course_id'  => $filter_course_id,
+                                    'filter_status'     => $filter_status,
                                 )),
                             ));
                             ?>
@@ -608,27 +612,31 @@ function nds_applicants_dashboard() {
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="submitted">Submitted</option>
                                 <option value="under_review">Under Review</option>
+                                <option value="waitlisted">Waitlisted</option>
+                                <option value="conditional_offer">Conditional Offer</option>
+                                <option value="offer_made">Offer Made</option>
                                 <option value="accepted">Accepted</option>
+                                <option value="declined">Declined</option>
+                                <option value="withdrawn">Withdrawn</option>
                                 <option value="rejected">Rejected</option>
+                                <option value="expired">Expired</option>
                             </select>
                         </div>
 
                         <div id="rejection-reason-wrap" class="hidden">
-                            <label for="reject_reason" class="block text-sm font-semibold text-gray-900 mb-2">Rejection reason</label>
+                            <label for="reject_reason" id="reason-label" class="block text-sm font-semibold text-gray-900 mb-2">Reason</label>
                             <select name="reject_reason" id="reject_reason"
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="">Select reason</option>
-                                <?php foreach (nds_get_rejection_reason_options() as $reason_key => $reason_label): ?>
-                                    <option value="<?php echo esc_attr($reason_key); ?>"><?php echo esc_html($reason_label); ?></option>
-                                <?php endforeach; ?>
                             </select>
                         </div>
 
                         <div>
                             <label for="notes" class="block text-sm font-semibold text-gray-900 mb-2">Notes</label>
-                            <textarea name="notes" id="notes" rows="3"
-                                      class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                      placeholder="Add any review notes or context for this decision..."></textarea>
+                            <select name="notes" id="notes"
+                                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
+                                <option value="">Select a note</option>
+                            </select>
                         </div>
 
                         <div>
@@ -699,6 +707,8 @@ function nds_applicants_dashboard() {
     </div>
 
     <script>
+    window.NDS_STATUS_REASONS = <?php echo wp_json_encode(nds_get_status_reason_options_map()); ?>;
+    window.NDS_STATUS_NOTES   = <?php echo wp_json_encode(nds_get_status_note_options_map()); ?>;
     document.addEventListener('DOMContentLoaded', function() {
         // --- DRILL-DOWN MODAL LOGIC ---
         const statsData = {
@@ -849,16 +859,47 @@ function nds_applicants_dashboard() {
             const statusField = document.getElementById('new_status');
             const reasonWrap = document.getElementById('rejection-reason-wrap');
             const reasonField = document.getElementById('reject_reason');
+            const reasonLabel = document.getElementById('reason-label');
+            const notesField = document.getElementById('notes');
 
             if (!statusField || !reasonWrap || !reasonField) return;
 
-            if (statusField.value === 'rejected') {
+            const reasonMap = (window.NDS_STATUS_REASONS || {});
+            const opts = reasonMap[statusField.value];
+
+            if (opts && Object.keys(opts).length) {
+                // Rebuild options
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+                Object.keys(opts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = key;
+                    o.textContent = opts[key];
+                    reasonField.appendChild(o);
+                });
+                if (reasonLabel) {
+                    const labelMap = { rejected:'Rejection reason', declined:'Decline reason', waitlisted:'Waitlist reason', withdrawn:'Withdrawal reason', expired:'Expiry reason' };
+                    reasonLabel.textContent = labelMap[statusField.value] || 'Reason';
+                }
                 reasonWrap.classList.remove('hidden');
                 reasonField.required = true;
             } else {
                 reasonWrap.classList.add('hidden');
                 reasonField.required = false;
                 reasonField.value = '';
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+            }
+
+            // Populate notes dropdown for current status
+            if (notesField && notesField.tagName === 'SELECT') {
+                const notesMap = (window.NDS_STATUS_NOTES || {});
+                const noteOpts = notesMap[statusField.value] || {};
+                notesField.innerHTML = '<option value="">Select a note</option>';
+                Object.keys(noteOpts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = noteOpts[key];
+                    o.textContent = noteOpts[key];
+                    notesField.appendChild(o);
+                });
             }
         }
 
@@ -952,6 +993,26 @@ function nds_view_application_details($application_id) {
 
             $reason_note = 'Rejection reason: ' . $reason_options[$reject_reason];
             $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+        } else {
+            $reason_options = nds_get_reason_options_for_status($new_status);
+            if (!empty($reason_options)) {
+                if (empty($reject_reason) || !isset($reason_options[$reject_reason])) {
+                    $_SESSION['nds_status_update_error'] = 'Please select a reason for the chosen status before saving.';
+                    wp_redirect(
+                        add_query_arg(
+                            array(
+                                'page'   => 'nds-applicants',
+                                'action' => 'view',
+                                'id'     => $application_id,
+                            ),
+                            admin_url('admin.php')
+                        )
+                    );
+                    exit;
+                }
+                $reason_note = ucfirst(str_replace('_', ' ', $new_status)) . ' reason: ' . $reason_options[$reject_reason];
+                $notes = $notes !== '' ? ($reason_note . "\n" . $notes) : $reason_note;
+            }
         }
 
         // Debug logging
@@ -1070,6 +1131,33 @@ function nds_view_application_details($application_id) {
                             <span class="dashicons dashicons-edit text-sm mr-1"></span>
                             Update status
                         </button>
+                        <?php
+                        $delete_block_reason = '';
+                        $can_delete = nds_can_delete_application((int) $application['id'], $delete_block_reason);
+                        $delete_url = wp_nonce_url(
+                            admin_url('admin.php?page=nds-applicants&action=delete&id=' . (int) $application['id']),
+                            'nds_applicants_action_delete_' . (int) $application['id']
+                        );
+                        ?>
+                        <?php if ($can_delete): ?>
+                            <a href="<?php echo esc_url($delete_url); ?>"
+                               onclick="return confirm('Permanently delete application <?php echo esc_js($application['application_no']); ?>? This cannot be undone.');"
+                               style="background-color:#dc2626 !important; color:#ffffff !important; border:1px solid #b91c1c !important;"
+                               onmouseover="this.style.backgroundColor='#b91c1c';"
+                               onmouseout="this.style.backgroundColor='#dc2626';"
+                               class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium no-underline">
+                                <span class="dashicons dashicons-trash text-sm mr-1"></span>
+                                Delete
+                            </a>
+                        <?php else: ?>
+                            <button type="button" disabled
+                                    title="<?php echo esc_attr($delete_block_reason); ?>"
+                                    style="background-color:#fecaca !important; color:#7f1d1d !important; border:1px solid #fca5a5 !important; opacity:0.7;"
+                                    class="inline-flex items-center px-4 py-2 rounded-lg text-sm font-medium cursor-not-allowed">
+                                <span class="dashicons dashicons-trash text-sm mr-1"></span>
+                                Delete
+                            </button>
+                        <?php endif; ?>
                     </div>
                 </div>
             </div>
@@ -1077,84 +1165,45 @@ function nds_view_application_details($application_id) {
 
         <!-- Main Content -->
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-8">
-            <!-- Application actions / quick controls -->
+            <?php
+            // Show Enroll / Revert actions only when relevant (after acceptance)
+            $show_post_accept_actions = false;
+            $student_id = !empty($application['student_id']) ? (int) $application['student_id'] : 0;
+            $has_enrollments = false;
+            if ($application['status'] === 'accepted' && $student_id > 0) {
+                global $wpdb;
+                $enrollment_count = $wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM {$wpdb->prefix}nds_student_enrollments WHERE student_id = %d",
+                    $student_id
+                ));
+                $has_enrollments = $enrollment_count > 0;
+                $show_post_accept_actions = true;
+            }
+            ?>
+            <?php if ($show_post_accept_actions): ?>
             <div class="bg-white shadow-sm rounded-xl border border-gray-100 p-5 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
                 <div>
-                    <h2 class="text-sm font-semibold text-gray-900">Manage this application</h2>
-                    <p class="text-xs text-gray-500">
-                        Use the quick actions to move this application forward and optionally notify the applicant by email.
-                    </p>
+                    <h2 class="text-sm font-semibold text-gray-900">Post-acceptance actions</h2>
+                    <p class="text-xs text-gray-500">Enroll the learner in their course or revert this acceptance.</p>
                 </div>
                 <div class="flex flex-wrap gap-2">
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 hover:border-blue-500 hover:bg-blue-50 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="under_review">
-                        <span class="dashicons dashicons-visibility text-xs mr-1"></span>
-                        Mark as Under Review
-                    </button>
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-emerald-500 text-xs font-medium text-emerald-700 bg-emerald-50 hover:bg-emerald-100 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="accepted">
-                        <span class="dashicons dashicons-yes-alt text-xs mr-1"></span>
-                        Accept Application
-                    </button>
-                    <?php
-                    // Only show enrollment / revert actions once an application is accepted
-                    if ($application['status'] === 'accepted') :
-                        global $wpdb;
-                        $student_id = !empty($application['student_id']) ? (int) $application['student_id'] : 0;
-                        $has_enrollments = false;
-                        if ($student_id > 0) {
-                            $enrollment_count = $wpdb->get_var($wpdb->prepare(
-                                "SELECT COUNT(*) FROM {$wpdb->prefix}nds_student_enrollments WHERE student_id = %d",
-                                $student_id
-                            ));
-                            $has_enrollments = $enrollment_count > 0;
-                        }
-
-                        // If there is a learner but no enrollments yet, offer a manual "Enroll in Course" action
-                        if ($student_id > 0 && !$has_enrollments) :
-                    ?>
-                            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_manual_enroll_from_application&application_id=' . intval($application['id'])), 'nds_manual_enroll_' . intval($application['id'])); ?>"
-                               class="inline-flex items-center px-3 py-2 rounded-lg border border-blue-500 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100"
-                               onclick="return confirm('This will enroll the student in the course(s) from their application. Continue?');">
-                                <span class="dashicons dashicons-groups text-xs mr-1"></span>
-                                Enroll in Course
-                            </a>
-                    <?php
-                        endif;
-
-                        // If a learner record exists at all, offer a "Revert to Applicant" action
-                        if ($student_id > 0) :
-                    ?>
-                            <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_revert_student_from_application&application_id=' . intval($application['id'])), 'nds_revert_student_' . intval($application['id'])); ?>"
-                               class="inline-flex items-center px-3 py-2 rounded-lg border border-red-500 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100"
-                               onclick="return confirm('This will delete the learner record and any enrollments, and return this person to applicant-only. Continue?');">
-                                <span class="dashicons dashicons-undo text-xs mr-1"></span>
-                                Revert to Applicant
-                            </a>
-                    <?php
-                        endif;
-                    endif;
-                    ?>
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-red-400 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="rejected">
-                        <span class="dashicons dashicons-dismiss text-xs mr-1"></span>
-                        Reject Application
-                    </button>
-                    <button type="button"
-                            class="inline-flex items-center px-3 py-2 rounded-lg border border-amber-400 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 nds-quick-status-btn"
-                            data-id="<?php echo esc_attr($application['id']); ?>"
-                            data-status="waitlisted">
-                        <span class="dashicons dashicons-clock text-xs mr-1"></span>
-                        Waitlist
-                    </button>
+                    <?php if (!$has_enrollments): ?>
+                        <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_manual_enroll_from_application&application_id=' . intval($application['id'])), 'nds_manual_enroll_' . intval($application['id'])); ?>"
+                           class="inline-flex items-center px-3 py-2 rounded-lg border border-blue-500 text-xs font-medium text-blue-700 bg-blue-50 hover:bg-blue-100"
+                           onclick="return confirm('This will enroll the student in the course(s) from their application. Continue?');">
+                            <span class="dashicons dashicons-groups text-xs mr-1"></span>
+                            Enroll in Course
+                        </a>
+                    <?php endif; ?>
+                    <a href="<?php echo wp_nonce_url(admin_url('admin-post.php?action=nds_revert_student_from_application&application_id=' . intval($application['id'])), 'nds_revert_student_' . intval($application['id'])); ?>"
+                       class="inline-flex items-center px-3 py-2 rounded-lg border border-red-500 text-xs font-medium text-red-700 bg-red-50 hover:bg-red-100"
+                       onclick="return confirm('This will delete the learner record and any enrollments, and return this person to applicant-only. Continue?');">
+                        <span class="dashicons dashicons-undo text-xs mr-1"></span>
+                        Revert to Applicant
+                    </a>
                 </div>
             </div>
+            <?php endif; ?>
 
             <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
             <!-- Application Info -->
@@ -1538,27 +1587,31 @@ function nds_view_application_details($application_id) {
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="submitted">Submitted</option>
                                 <option value="under_review">Under Review</option>
+                                <option value="waitlisted">Waitlisted</option>
+                                <option value="conditional_offer">Conditional Offer</option>
+                                <option value="offer_made">Offer Made</option>
                                 <option value="accepted">Accepted</option>
+                                <option value="declined">Declined</option>
+                                <option value="withdrawn">Withdrawn</option>
                                 <option value="rejected">Rejected</option>
+                                <option value="expired">Expired</option>
                             </select>
                         </div>
 
                         <div id="rejection-reason-wrap" class="hidden">
-                            <label for="reject_reason" class="block text-sm font-semibold text-gray-900 mb-2">Rejection reason</label>
+                            <label for="reject_reason" id="reason-label" class="block text-sm font-semibold text-gray-900 mb-2">Reason</label>
                             <select name="reject_reason" id="reject_reason"
                                     class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
                                 <option value="">Select reason</option>
-                                <?php foreach (nds_get_rejection_reason_options() as $reason_key => $reason_label): ?>
-                                    <option value="<?php echo esc_attr($reason_key); ?>"><?php echo esc_html($reason_label); ?></option>
-                                <?php endforeach; ?>
                             </select>
                         </div>
 
                         <div>
                             <label for="notes" class="block text-sm font-semibold text-gray-900 mb-2">Notes</label>
-                            <textarea name="notes" id="notes" rows="3"
-                                      class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm"
-                                      placeholder="Add any review notes or context for this decision..."></textarea>
+                            <select name="notes" id="notes"
+                                    class="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm">
+                                <option value="">Select a note</option>
+                            </select>
                         </div>
 
                         <div class="flex items-center justify-end gap-3 pt-4 border-t border-gray-200">
@@ -1580,63 +1633,67 @@ function nds_view_application_details($application_id) {
     </div>
 
     <script>
+    window.NDS_STATUS_REASONS = <?php echo wp_json_encode(nds_get_status_reason_options_map()); ?>;
+    window.NDS_STATUS_NOTES   = <?php echo wp_json_encode(nds_get_status_note_options_map()); ?>;
     document.addEventListener('DOMContentLoaded', function() {
         const statusModal = document.getElementById('status-modal');
         const updateButtons = document.querySelectorAll('.update-status-btn');
         const quickStatusButtons = document.querySelectorAll('.nds-quick-status-btn');
-
-        // #region agent log: DOMContentLoaded modal check
-        fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                sessionId: 'debug-session',
-                runId: 'details-dom-ready',
-                hypothesisId: 'H_modal_2',
-                location: 'applicants-management.php:DOMContentLoaded',
-                message: 'DOMContentLoaded - modal check',
-                data: {
-                    hasStatusModal: !!statusModal,
-                    updateButtonsCount: updateButtons.length,
-                    quickButtonsCount: quickStatusButtons.length
-                },
-                timestamp: Date.now()
-            })
-        }).catch(() => {});
-        // #endregion
 
         // Ensure modal is attached directly to <body> so it centers over the full viewport
         if (statusModal && statusModal.parentElement !== document.body) {
             document.body.appendChild(statusModal);
         }
 
-        function openStatusModal(id, status) {
-            const idField = document.getElementById('modal-application-id');
+        function applyReasonField() {
             const statusField = document.getElementById('new_status');
             const reasonWrap = document.getElementById('rejection-reason-wrap');
             const reasonField = document.getElementById('reject_reason');
+            const reasonLabel = document.getElementById('reason-label');
+            const notesField = document.getElementById('notes');
+            if (!statusField || !reasonWrap || !reasonField) return;
 
-            // #region agent log: openStatusModal called
-            fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    sessionId: 'debug-session',
-                    runId: 'details-open-modal',
-                    hypothesisId: 'H_modal_3',
-                    location: 'applicants-management.php:openStatusModal',
-                    message: 'openStatusModal called',
-                    data: {
-                        id,
-                        status,
-                        hasStatusModal: !!statusModal,
-                        hasIdField: !!idField,
-                        hasStatusField: !!statusField
-                    },
-                    timestamp: Date.now()
-                })
-            }).catch(() => {});
-            // #endregion
+            const reasonMap = (window.NDS_STATUS_REASONS || {});
+            const opts = reasonMap[statusField.value];
+
+            if (opts && Object.keys(opts).length) {
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+                Object.keys(opts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = key;
+                    o.textContent = opts[key];
+                    reasonField.appendChild(o);
+                });
+                if (reasonLabel) {
+                    const labelMap = { rejected:'Rejection reason', declined:'Decline reason', waitlisted:'Waitlist reason', withdrawn:'Withdrawal reason', expired:'Expiry reason' };
+                    reasonLabel.textContent = labelMap[statusField.value] || 'Reason';
+                }
+                reasonWrap.classList.remove('hidden');
+                reasonField.required = true;
+            } else {
+                reasonWrap.classList.add('hidden');
+                reasonField.required = false;
+                reasonField.value = '';
+                reasonField.innerHTML = '<option value="">Select reason</option>';
+            }
+
+            // Populate notes dropdown for current status
+            if (notesField && notesField.tagName === 'SELECT') {
+                const notesMap = (window.NDS_STATUS_NOTES || {});
+                const noteOpts = notesMap[statusField.value] || {};
+                notesField.innerHTML = '<option value="">Select a note</option>';
+                Object.keys(noteOpts).forEach(function(key) {
+                    const o = document.createElement('option');
+                    o.value = noteOpts[key];
+                    o.textContent = noteOpts[key];
+                    notesField.appendChild(o);
+                });
+            }
+        }
+
+        function openStatusModal(id, status) {
+            const idField = document.getElementById('modal-application-id');
+            const statusField = document.getElementById('new_status');
 
             if (idField) {
                 idField.value = id;
@@ -1645,60 +1702,13 @@ function nds_view_application_details($application_id) {
                 statusField.value = status;
             }
 
-            if (statusField && reasonWrap && reasonField) {
-                if (statusField.value === 'rejected') {
-                    reasonWrap.classList.remove('hidden');
-                    reasonField.required = true;
-                } else {
-                    reasonWrap.classList.add('hidden');
-                    reasonField.required = false;
-                    reasonField.value = '';
-                }
-            }
+            applyReasonField();
 
             if (statusModal) {
                 statusModal.classList.remove('hidden');
                 statusModal.classList.add('flex', 'items-center', 'justify-center');
                 statusModal.style.display = 'flex';
                 document.body.style.overflow = 'hidden';
-
-                // #region agent log: modal shown attempt
-                const computedStyle = window.getComputedStyle(statusModal);
-                fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sessionId: 'debug-session',
-                        runId: 'details-open-modal',
-                        hypothesisId: 'H_modal_4',
-                        location: 'applicants-management.php:openStatusModal-after',
-                        message: 'After trying to show modal',
-                        data: {
-                            display: computedStyle.display,
-                            visibility: computedStyle.visibility,
-                            zIndex: computedStyle.zIndex,
-                            hasHiddenClass: statusModal.classList.contains('hidden')
-                        },
-                        timestamp: Date.now()
-                    })
-                }).catch(() => {});
-                // #endregion
-            } else {
-                // #region agent log: modal not found
-                fetch('http://127.0.0.1:7247/ingest/dd126561-a5b5-4577-8b70-512cd5168604', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        sessionId: 'debug-session',
-                        runId: 'details-open-modal',
-                        hypothesisId: 'H_modal_5',
-                        location: 'applicants-management.php:openStatusModal',
-                        message: 'statusModal is null',
-                        data: { id, status },
-                        timestamp: Date.now()
-                    })
-                }).catch(() => {});
-                // #endregion
             }
         }
 
@@ -1716,20 +1726,7 @@ function nds_view_application_details($application_id) {
 
         const newStatusField = document.getElementById('new_status');
         if (newStatusField) {
-            newStatusField.addEventListener('change', function() {
-                const reasonWrap = document.getElementById('rejection-reason-wrap');
-                const reasonField = document.getElementById('reject_reason');
-                if (!reasonWrap || !reasonField) return;
-
-                if (newStatusField.value === 'rejected') {
-                    reasonWrap.classList.remove('hidden');
-                    reasonField.required = true;
-                } else {
-                    reasonWrap.classList.add('hidden');
-                    reasonField.required = false;
-                    reasonField.value = '';
-                }
-            });
+            newStatusField.addEventListener('change', applyReasonField);
         }
 
         if (statusModal) {
@@ -2864,6 +2861,112 @@ function nds_get_rejection_reason_options() {
         'eligibility_criteria' => 'Eligibility criteria not met',
         'other' => 'Other reason',
     );
+}
+
+/**
+ * Reason options keyed by status. Statuses not present here do not require a reason.
+ */
+function nds_get_status_reason_options_map() {
+    return array(
+        'rejected' => nds_get_rejection_reason_options(),
+        'declined' => array(
+            'accepted_other_offer' => 'Applicant accepted another offer',
+            'fees_too_high'        => 'Fees too high / financial reasons',
+            'changed_mind'         => 'Changed mind about studying',
+            'personal_reasons'     => 'Personal reasons',
+            'other'                => 'Other reason',
+        ),
+        'waitlisted' => array(
+            'capacity_full'        => 'Program capacity is full',
+            'pending_documents'    => 'Awaiting supporting documents',
+            'pending_review'       => 'Awaiting further review',
+            'other'                => 'Other reason',
+        ),
+        'withdrawn' => array(
+            'applicant_request'    => 'Withdrawn at applicant request',
+            'no_response'          => 'No response from applicant',
+            'duplicate'            => 'Duplicate application',
+            'other'                => 'Other reason',
+        ),
+        'expired' => array(
+            'deadline_passed'      => 'Application deadline passed',
+            'no_response'          => 'No response from applicant',
+            'other'                => 'Other reason',
+        ),
+    );
+}
+
+function nds_get_reason_options_for_status($status) {
+    $map = nds_get_status_reason_options_map();
+    return isset($map[$status]) ? $map[$status] : array();
+}
+
+/**
+ * Predefined note templates per status. JS populates the notes dropdown from this map.
+ */
+function nds_get_status_note_options_map() {
+    $generic = array(
+        'reviewed_documents'   => 'Reviewed all submitted documents.',
+        'awaiting_documents'   => 'Awaiting outstanding documents from applicant.',
+        'contacted_applicant'  => 'Contacted applicant for follow-up.',
+        'no_response'          => 'No response received from applicant.',
+        'manual_decision'      => 'Decision made after manual review.',
+    );
+
+    return array(
+        'submitted'         => $generic,
+        'under_review'      => array(
+            'initial_review'      => 'Initial review in progress.',
+            'awaiting_documents'  => 'Awaiting outstanding documents from applicant.',
+            'verifying_records'   => 'Verifying academic records.',
+            'panel_review'        => 'Forwarded to selection panel for review.',
+        ),
+        'waitlisted'        => array(
+            'capacity_full'       => 'Program capacity is full — placed on waitlist.',
+            'pending_documents'   => 'Waitlisted pending receipt of documents.',
+            'pending_review'      => 'Waitlisted pending further review.',
+        ),
+        'conditional_offer' => array(
+            'pending_results'     => 'Conditional offer pending final results.',
+            'pending_documents'   => 'Conditional offer pending submission of documents.',
+            'pending_payment'     => 'Conditional offer pending payment.',
+        ),
+        'offer_made'        => array(
+            'standard_offer'      => 'Standard offer made — awaiting acceptance.',
+            'with_scholarship'    => 'Offer made with scholarship/financial aid.',
+            'with_deposit'        => 'Offer made — deposit required to confirm.',
+        ),
+        'accepted'          => array(
+            'meets_requirements'  => 'Applicant meets all entry requirements.',
+            'documents_verified'  => 'All supporting documents verified.',
+            'panel_approved'      => 'Approved by selection panel.',
+        ),
+        'declined'          => array(
+            'applicant_declined'  => 'Applicant declined the offer.',
+            'accepted_other'      => 'Applicant accepted offer elsewhere.',
+            'no_response'         => 'No response received from applicant.',
+        ),
+        'withdrawn'         => array(
+            'applicant_request'   => 'Withdrawn at applicant request.',
+            'duplicate'           => 'Duplicate application withdrawn.',
+            'no_response'         => 'No response received from applicant.',
+        ),
+        'rejected'          => array(
+            'requirements_not_met' => 'Applicant does not meet entry requirements.',
+            'documents_incomplete' => 'Supporting documents incomplete.',
+            'capacity_full'        => 'Rejected due to capacity constraints.',
+            'panel_decision'       => 'Rejection decided by selection panel.',
+        ),
+        'expired'           => array(
+            'deadline_passed'     => 'Application deadline passed without action.',
+            'no_response'         => 'No response received from applicant.',
+        ),
+    );
+}
+
+function nds_get_note_options_for_status($status) {
+    $map = nds_get_status_note_options_map();
+    return isset($map[$status]) ? $map[$status] : array();
 }
 
 /**

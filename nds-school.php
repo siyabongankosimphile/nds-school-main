@@ -826,7 +826,10 @@ function nds_portal_ensure_quiz_attempts_table() {
         correct_answers INT NOT NULL DEFAULT 0,
         score_percent DECIMAL(5,2) NULL,
         answers_json LONGTEXT NULL,
+        started_at DATETIME NULL,
         submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        ip_address VARCHAR(45) NULL,
+        user_agent VARCHAR(255) NULL,
         PRIMARY KEY (id),
         KEY idx_content_student (content_id, student_id),
         KEY idx_student (student_id),
@@ -836,7 +839,40 @@ function nds_portal_ensure_quiz_attempts_table() {
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
     dbDelta($sql);
 
+    // Backfill columns on existing installs (dbDelta does not always add columns to legacy tables).
+    $existing_cols = $wpdb->get_col("SHOW COLUMNS FROM {$table}", 0);
+    if (is_array($existing_cols)) {
+        if (!in_array('started_at', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN started_at DATETIME NULL AFTER answers_json");
+        }
+        if (!in_array('ip_address', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN ip_address VARCHAR(45) NULL");
+        }
+        if (!in_array('user_agent', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN user_agent VARCHAR(255) NULL");
+        }
+    }
+
     return $table;
+}
+
+/**
+ * Resolve the best-effort client IP address for the current request.
+ */
+function nds_portal_get_client_ip() {
+    $candidates = array('HTTP_CF_CONNECTING_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_REAL_IP', 'REMOTE_ADDR');
+    foreach ($candidates as $key) {
+        if (empty($_SERVER[$key])) { continue; }
+        $value = (string) $_SERVER[$key];
+        if ($key === 'HTTP_X_FORWARDED_FOR' && strpos($value, ',') !== false) {
+            $value = trim(explode(',', $value)[0]);
+        }
+        $value = trim($value);
+        if ($value !== '' && filter_var($value, FILTER_VALIDATE_IP)) {
+            return substr($value, 0, 45);
+        }
+    }
+    return '';
 }
 
 /**
@@ -966,24 +1002,61 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
     $graded_questions = 0;
     $correct_answers = 0;
     $normalized_answers = array();
+    $correct_map = array();
+    $review_rows = array();
 
     foreach ($questions as $idx => $question) {
         $q_type = sanitize_key((string) ($question['type'] ?? 'multiple_choice'));
         $answer_raw = isset($answers_raw[$idx]) ? (string) $answers_raw[$idx] : '';
+        $question_text = (string) ($question['text'] ?? '');
 
         if ($q_type === 'multiple_choice') {
             $answer = strtoupper(substr(sanitize_text_field($answer_raw), 0, 1));
             $expected = strtoupper(substr(sanitize_text_field((string) ($question['correct'] ?? '')), 0, 1));
 
             $normalized_answers[$idx] = $answer;
+            $correct_map[$idx] = $expected;
             $graded_questions++;
-            if ($answer !== '' && $expected !== '' && $answer === $expected) {
+            $is_correct = ($answer !== '' && $expected !== '' && $answer === $expected);
+            if ($is_correct) {
                 $correct_answers++;
             }
+
+            $options = is_array($question['options'] ?? null) ? array_values($question['options']) : array();
+            $letters = array('A', 'B', 'C', 'D');
+            $student_letter_text = '';
+            $expected_letter_text = '';
+            foreach ($letters as $li => $letter) {
+                $opt_text = isset($options[$li]) ? (string) $options[$li] : '';
+                if ($answer === $letter) { $student_letter_text = $opt_text; }
+                if ($expected === $letter) { $expected_letter_text = $opt_text; }
+            }
+
+            $review_rows[] = array(
+                'index' => $idx,
+                'type' => 'multiple_choice',
+                'question' => $question_text,
+                'student_answer' => $answer,
+                'student_answer_text' => $student_letter_text,
+                'correct_answer' => $expected,
+                'correct_answer_text' => $expected_letter_text,
+                'is_correct' => $is_correct,
+            );
             continue;
         }
 
         $normalized_answers[$idx] = sanitize_textarea_field($answer_raw);
+        $correct_map[$idx] = (string) ($question['correct'] ?? '');
+        $review_rows[] = array(
+            'index' => $idx,
+            'type' => $q_type,
+            'question' => $question_text,
+            'student_answer' => $normalized_answers[$idx],
+            'student_answer_text' => $normalized_answers[$idx],
+            'correct_answer' => $correct_map[$idx],
+            'correct_answer_text' => $correct_map[$idx],
+            'is_correct' => null,
+        );
     }
 
     $score_percent = $graded_questions > 0
@@ -1006,6 +1079,18 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
         $attempt_no = 1;
     }
 
+    // Recover started_at from transient set when the student opened the quiz; fallback to now.
+    $start_transient_key = 'nds_quiz_start_' . $student_id . '_' . $content_id;
+    $started_at_value = get_transient($start_transient_key);
+    if (empty($started_at_value)) {
+        $started_at_value = current_time('mysql');
+    } else {
+        delete_transient($start_transient_key);
+    }
+
+    $client_ip = function_exists('nds_portal_get_client_ip') ? nds_portal_get_client_ip() : '';
+    $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? substr((string) $_SERVER['HTTP_USER_AGENT'], 0, 255) : '';
+
     $saved = $wpdb->insert(
         $quiz_attempts_table,
         array(
@@ -1019,9 +1104,12 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
             'correct_answers' => $correct_answers,
             'score_percent' => $score_percent,
             'answers_json' => wp_json_encode($normalized_answers),
+            'started_at' => $started_at_value,
             'submitted_at' => current_time('mysql'),
+            'ip_address' => $client_ip,
+            'user_agent' => $user_agent,
         ),
-        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s')
+        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%s', '%s')
     );
 
     if ($saved === false) {
@@ -1037,7 +1125,29 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
         'score_percent' => $score_percent,
         'pass_threshold' => $pass_threshold,
         'passed' => $passed,
+        'started_at' => $started_at_value,
+        'submitted_at' => current_time('mysql'),
+        'review' => $review_rows,
     ));
+});
+
+// Mark the start of a quiz attempt to capture started_at on submit.
+add_action('wp_ajax_nds_portal_start_quiz_attempt', function () {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+    $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+    if ($nonce === '' || !wp_verify_nonce($nonce, 'nds_portal_quiz_nonce')) {
+        wp_send_json_error('Invalid request token.', 403);
+    }
+    $student_id = (int) nds_portal_get_current_student_id();
+    $content_id = isset($_POST['content_id']) ? (int) $_POST['content_id'] : 0;
+    if ($student_id <= 0 || $content_id <= 0) {
+        wp_send_json_error('Invalid request.');
+    }
+    $now = current_time('mysql');
+    set_transient('nds_quiz_start_' . $student_id . '_' . $content_id, $now, 6 * HOUR_IN_SECONDS);
+    wp_send_json_success(array('started_at' => $now));
 });
 
 add_action('wp_ajax_nds_portal_submit_assignment', function () {
