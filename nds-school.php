@@ -21,6 +21,7 @@ if (!defined('NDS_SCHOOL_PLUGIN_DIR')) {
 }
 
 // Include calendar functions for AJAX handlers
+require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/common.php';
 require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/calendar-functions.php';
 require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/notification-functions.php';
 require_once NDS_SCHOOL_PLUGIN_DIR . 'includes/program-functions.php';
@@ -547,6 +548,32 @@ function nds_school_activate() {
     flush_rewrite_rules();
 }
 register_activation_hook(__FILE__, 'nds_school_activate');
+
+// One-time cleanup: replace literal "null" strings in code columns with empty string
+add_action('admin_init', 'nds_cleanup_null_code_strings');
+function nds_cleanup_null_code_strings() {
+    if (get_option('nds_null_code_cleanup_done')) {
+        return;
+    }
+    global $wpdb;
+    $tables_cols = array(
+        $wpdb->prefix . 'nds_courses'   => 'code',
+        $wpdb->prefix . 'nds_modules'   => array('module_code', 'code'),
+        $wpdb->prefix . 'nds_faculties' => 'code',
+        $wpdb->prefix . 'nds_programs'  => 'code',
+        $wpdb->prefix . 'nds_rooms'     => 'code',
+    );
+    foreach ($tables_cols as $table => $cols) {
+        foreach ((array) $cols as $col) {
+            // Only run if the column actually exists
+            $exists = $wpdb->get_var("SHOW COLUMNS FROM `{$table}` LIKE '{$col}'");
+            if ($exists) {
+                $wpdb->query("UPDATE `{$table}` SET `{$col}` = '' WHERE `{$col}` = 'null' OR `{$col}` = 'NULL'");
+            }
+        }
+    }
+    update_option('nds_null_code_cleanup_done', 1);
+}
 
 // Manual migration runner (one-time use): /wp-admin/admin-post.php?action=nds_run_migrations
 add_action('admin_post_nds_run_migrations', 'nds_run_migrations_action');

@@ -58,6 +58,12 @@ function nds_applicants_dashboard() {
         }
     }
     
+    // Handle "New Application" action (admin creates application on behalf of student)
+    if (isset($_GET['action']) && $_GET['action'] === 'new') {
+        nds_render_admin_new_application_form();
+        return;
+    }
+
     // Handle single application actions
     if (isset($_GET['action']) && isset($_GET['id'])) {
         $action = sanitize_text_field($_GET['action']);
@@ -367,6 +373,13 @@ function nds_applicants_dashboard() {
                             </p>
                         </div>
                     </div>
+                    <div class="flex items-center gap-3">
+                        <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants&action=new')); ?>"
+                           class="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium shadow-sm">
+                            <span class="dashicons dashicons-plus-alt2 text-sm mr-1"></span>
+                            New Application
+                        </a>
+                    </div>
                 </div>
             </div>
         </div>
@@ -374,6 +387,12 @@ function nds_applicants_dashboard() {
         <!-- Main Content -->
         <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8 space-y-6">
             <!-- Flash messages -->
+        <?php if (isset($_GET['app_created']) && $_GET['app_created'] === '1'): ?>
+                <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center">
+                    <span class="dashicons dashicons-yes-alt text-emerald-600 mr-3 text-xl"></span>
+                    <p class="text-sm text-emerald-800">Application created successfully!</p>
+                </div>
+        <?php endif; ?>
         <?php if (isset($_SESSION['nds_status_update_success'])): ?>
                 <div class="bg-emerald-50 border border-emerald-200 rounded-lg p-4 flex items-center">
                     <span class="dashicons dashicons-yes-alt text-emerald-600 mr-3 text-xl"></span>
@@ -3320,3 +3339,720 @@ function nds_convert_application_to_student($application_id) {
         });
     }
 }
+
+// =============================================================================
+// ADMIN: NEW APPLICATION FORM
+// =============================================================================
+
+/**
+ * Render the "New Application" form for admins to submit on behalf of a student.
+ * Accessible at: admin.php?page=nds-applicants&action=new
+ */
+function nds_render_admin_new_application_form() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    global $wpdb;
+
+    // Enqueue styles
+    $plugin_dir = plugin_dir_path(dirname(__FILE__));
+    $css_file   = $plugin_dir . 'assets/css/frontend.css';
+    if (file_exists($css_file)) {
+        wp_enqueue_style(
+            'nds-tailwindcss-new-app',
+            plugin_dir_url(dirname(__FILE__)) . 'assets/css/frontend.css',
+            array(), filemtime($css_file), 'all'
+        );
+    }
+
+    // Load dropdowns
+    $faculties       = $wpdb->get_results("SELECT id, name FROM {$wpdb->prefix}nds_faculties ORDER BY name ASC", ARRAY_A);
+    $programs        = $wpdb->get_results("SELECT id, name, faculty_id FROM {$wpdb->prefix}nds_programs ORDER BY name ASC", ARRAY_A);
+    $qualifications  = $wpdb->get_results("SELECT id, name, program_id FROM {$wpdb->prefix}nds_courses ORDER BY name ASC", ARRAY_A);
+
+    $nonce = wp_create_nonce('nds_admin_create_application');
+    ?>
+    <div class="wrap nds-tailwind-wrapper bg-gray-50 pb-32" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin-left: -20px; padding-left: 20px; margin-top: -20px;">
+        <!-- Header -->
+        <div class="bg-white shadow-sm border-b border-gray-200">
+            <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+                <div class="flex justify-between items-center py-6">
+                    <div class="flex items-center space-x-4">
+                        <div class="w-12 h-12 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center">
+                            <span class="dashicons dashicons-clipboard text-white text-2xl"></span>
+                        </div>
+                        <div>
+                            <h1 class="text-2xl font-bold text-gray-900">New Application</h1>
+                            <p class="text-gray-600 text-sm">Submit an application on behalf of a student.</p>
+                        </div>
+                    </div>
+                    <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants')); ?>"
+                       class="inline-flex items-center px-4 py-2 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium">
+                        <span class="dashicons dashicons-arrow-left-alt2 text-sm mr-1"></span>
+                        Back to applications
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <div class="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data" class="space-y-6">
+                <?php wp_nonce_field('nds_admin_create_application', 'nds_admin_app_nonce'); ?>
+                <input type="hidden" name="action" value="nds_admin_create_application">
+
+                <!-- Course Selection -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Course Selection</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Faculty <span class="text-red-500">*</span></label>
+                            <select name="faculty_id" id="adm_faculty_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select faculty</option>
+                                <?php foreach ($faculties as $fac): ?>
+                                    <option value="<?php echo esc_attr($fac['id']); ?>"><?php echo esc_html($fac['name']); ?></option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Program <span class="text-red-500">*</span></label>
+                            <select name="program_id" id="adm_program_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select program</option>
+                                <?php foreach ($programs as $prog): ?>
+                                    <option value="<?php echo esc_attr($prog['id']); ?>" data-faculty="<?php echo esc_attr($prog['faculty_id']); ?>">
+                                        <?php echo esc_html($prog['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Qualification (Course) <span class="text-red-500">*</span></label>
+                            <select name="course_id" id="adm_course_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select qualification</option>
+                                <?php foreach ($qualifications as $qual): ?>
+                                    <option value="<?php echo esc_attr($qual['id']); ?>" data-program="<?php echo esc_attr($qual['program_id']); ?>"
+                                        data-name="<?php echo esc_attr($qual['name']); ?>">
+                                        <?php echo esc_html($qual['name']); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                            <input type="hidden" name="course_name" id="adm_course_name">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Level</label>
+                            <select name="level" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select level</option>
+                                <option value="NQF Level 1">NQF Level 1</option>
+                                <option value="NQF Level 2">NQF Level 2</option>
+                                <option value="NQF Level 3">NQF Level 3</option>
+                                <option value="NQF Level 4">NQF Level 4</option>
+                                <option value="NQF Level 5">NQF Level 5</option>
+                                <option value="NQF Level 6">NQF Level 6</option>
+                                <option value="NQF Level 7">NQF Level 7</option>
+                                <option value="NQF Level 8">NQF Level 8</option>
+                                <option value="NQF Level 9">NQF Level 9</option>
+                                <option value="NQF Level 10">NQF Level 10</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Personal Details -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Personal Details</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="full_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ID / Passport Number <span class="text-red-500">*</span></label>
+                            <input type="text" name="id_number" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Date of Birth <span class="text-red-500">*</span></label>
+                            <input type="date" name="date_of_birth" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Gender <span class="text-red-500">*</span></label>
+                            <select name="gender" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select gender</option>
+                                <option value="Male">Male</option>
+                                <option value="Female">Female</option>
+                                <option value="Other">Other</option>
+                                <option value="Prefer not to say">Prefer not to say</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Marital Status</label>
+                            <select name="marital_status" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="">Select status</option>
+                                <option value="Single">Single</option>
+                                <option value="Married">Married</option>
+                                <option value="Divorced">Divorced</option>
+                                <option value="Widowed">Widowed</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Nationality</label>
+                            <input type="text" name="nationality" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. South African">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Country of Birth</label>
+                            <input type="text" name="country_of_birth" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. South Africa">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Contact & Address -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Contact &amp; Address</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+                            <input type="email" name="email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Cell / Phone <span class="text-red-500">*</span></label>
+                            <input type="text" name="cell_no" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Street Address <span class="text-red-500">*</span></label>
+                            <textarea name="street_address" required rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">City <span class="text-red-500">*</span></label>
+                            <input type="text" name="city" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Province <span class="text-red-500">*</span></label>
+                            <input type="text" name="province" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Postal Code <span class="text-red-500">*</span></label>
+                            <input type="text" name="postal_code" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Person Responsible for Fees -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Person Responsible for Fees</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="responsible_full_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Relationship</label>
+                            <input type="text" name="relationship" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="e.g. Parent, Spouse, Self">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">ID Number <span class="text-red-500">*</span></label>
+                            <input type="text" name="responsible_id_number" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Phone <span class="text-red-500">*</span></label>
+                            <input type="text" name="responsible_phone" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+                            <input type="email" name="responsible_email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Occupation <span class="text-red-500">*</span></label>
+                            <input type="text" name="occupation" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+                            <textarea name="responsible_street_address" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">City</label>
+                            <input type="text" name="responsible_city" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Province</label>
+                            <input type="text" name="responsible_province" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                            <input type="text" name="responsible_postal_code" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Company Name</label>
+                            <input type="text" name="company_name" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Work Telephone</label>
+                            <input type="text" name="work_telephone" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Work Email</label>
+                            <input type="email" name="work_email" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Emergency Contact -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Emergency Contact</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Full Name <span class="text-red-500">*</span></label>
+                            <input type="text" name="emergency_full_name" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Relationship</label>
+                            <input type="text" name="emergency_relationship" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Phone <span class="text-red-500">*</span></label>
+                            <input type="text" name="emergency_phone" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Email <span class="text-red-500">*</span></label>
+                            <input type="email" name="emergency_email" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Street Address</label>
+                            <textarea name="emergency_street_address" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">City</label>
+                            <input type="text" name="emergency_city" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Province</label>
+                            <input type="text" name="emergency_province" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Postal Code</label>
+                            <input type="text" name="emergency_postal_code" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Educational Background -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Educational Background</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Highest Grade Completed <span class="text-red-500">*</span></label>
+                            <input type="text" name="highest_grade" required placeholder="e.g. Grade 12" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Year Passed <span class="text-red-500">*</span></label>
+                            <input type="text" name="year_passed" required placeholder="e.g. 2020" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">School Attended <span class="text-red-500">*</span></label>
+                            <input type="text" name="school_attended" required class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">School Location</label>
+                            <input type="text" name="school_location" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Other Qualifications</label>
+                            <textarea name="other_qualifications" rows="2" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="List any other qualifications"></textarea>
+                        </div>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Year of Completion</label>
+                            <input type="text" name="year_completion" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Languages -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Languages</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <div class="md:col-span-2">
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Home Language</label>
+                            <input type="text" name="home_language" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <?php
+                        $lang_fields = array(
+                            array('label' => 'English Writing',  'name' => 'english_write'),
+                            array('label' => 'English Reading',  'name' => 'english_read'),
+                            array('label' => 'English Speaking', 'name' => 'english_speak'),
+                        );
+                        foreach ($lang_fields as $lf): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($lf['label']); ?></label>
+                            <select name="<?php echo esc_attr($lf['name']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="Good">Good</option>
+                                <option value="Average">Average</option>
+                                <option value="Poor">Poor</option>
+                            </select>
+                        </div>
+                        <?php endforeach; ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1">Other Language</label>
+                            <input type="text" name="other_language" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                        </div>
+                        <?php
+                        $other_lang_fields = array(
+                            array('label' => 'Other Language Writing',  'name' => 'other_language_write'),
+                            array('label' => 'Other Language Reading',  'name' => 'other_language_read'),
+                            array('label' => 'Other Language Speaking', 'name' => 'other_language_speak'),
+                        );
+                        foreach ($other_lang_fields as $lf): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($lf['label']); ?></label>
+                            <select name="<?php echo esc_attr($lf['name']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="Good">Good</option>
+                                <option value="Average">Average</option>
+                                <option value="Poor">Poor</option>
+                            </select>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Medical -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Medical Information</h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <?php
+                        $medical_fields = array(
+                            array('name' => 'physical_illness',    'label' => 'Physical illness / disability?', 'specify' => 'specify_physical_illness'),
+                            array('name' => 'food_allergies',      'label' => 'Food allergies?',                'specify' => 'specify_food_allergies'),
+                            array('name' => 'chronic_medication',  'label' => 'Chronic medication?',            'specify' => 'specify_chronic_medication'),
+                            array('name' => 'pregnant_or_planning','label' => 'Pregnant or planning?',          'specify' => null),
+                            array('name' => 'smoke',               'label' => 'Do you smoke?',                  'specify' => null),
+                        );
+                        foreach ($medical_fields as $mf): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($mf['label']); ?></label>
+                            <select name="<?php echo esc_attr($mf['name']); ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                                <option value="No">No</option>
+                                <option value="Yes">Yes</option>
+                            </select>
+                            <?php if ($mf['specify']): ?>
+                            <input type="text" name="<?php echo esc_attr($mf['specify']); ?>" placeholder="If yes, please specify" class="mt-2 w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500">
+                            <?php endif; ?>
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Supporting Documents -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Supporting Documents <span class="text-xs font-normal text-gray-500">(PDF, optional)</span></h2>
+                    </div>
+                    <div class="p-6 grid grid-cols-1 md:grid-cols-2 gap-5">
+                        <?php
+                        $doc_fields = array(
+                            'id_passport_applicant'   => "Applicant's ID / Passport",
+                            'id_passport_responsible' => "Responsible Person's ID / Passport",
+                            'saqa_certificate'        => 'SAQA Certificate',
+                            'study_permit'            => 'Study Permit',
+                            'parent_spouse_id'        => 'Parent / Spouse ID',
+                            'latest_results'          => 'Latest Results',
+                            'proof_residence'         => 'Proof of Residence',
+                            'highest_grade_cert'      => 'Highest Grade Certificate',
+                            'proof_medical_aid'       => 'Proof of Medical Aid',
+                        );
+                        foreach ($doc_fields as $field => $label): ?>
+                        <div>
+                            <label class="block text-sm font-medium text-gray-700 mb-1"><?php echo esc_html($label); ?></label>
+                            <input type="file" name="<?php echo esc_attr($field); ?>" accept=".pdf"
+                                   class="w-full text-sm text-gray-600 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-medium file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                        </div>
+                        <?php endforeach; ?>
+                    </div>
+                </div>
+
+                <!-- Motivation -->
+                <div class="bg-white shadow-sm rounded-xl border border-gray-100 overflow-hidden">
+                    <div class="px-6 py-4 border-b border-gray-100 bg-blue-50">
+                        <h2 class="text-sm font-semibold text-blue-900">Motivation Letter</h2>
+                    </div>
+                    <div class="p-6">
+                        <textarea name="motivation_letter" rows="5" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" placeholder="Why does the applicant want to enrol in this course?"></textarea>
+                    </div>
+                </div>
+
+                <!-- Submit -->
+                <div class="flex items-center justify-end gap-4">
+                    <a href="<?php echo esc_url(admin_url('admin.php?page=nds-applicants')); ?>"
+                       class="inline-flex items-center px-5 py-2.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-sm font-medium">
+                        Cancel
+                    </a>
+                    <button type="submit"
+                            class="inline-flex items-center px-6 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold shadow-sm">
+                        <span class="dashicons dashicons-yes-alt text-sm mr-1"></span>
+                        Submit Application
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script>
+    (function() {
+        var facultySelect  = document.getElementById('adm_faculty_id');
+        var programSelect  = document.getElementById('adm_program_id');
+        var courseSelect   = document.getElementById('adm_course_id');
+        var courseNameInput = document.getElementById('adm_course_name');
+
+        function filterPrograms() {
+            var facId = facultySelect.value;
+            var opts = programSelect.querySelectorAll('option');
+            var firstVisible = '';
+            opts.forEach(function(opt) {
+                if (!opt.value) return;
+                var show = !facId || opt.dataset.faculty === facId;
+                opt.style.display = show ? '' : 'none';
+                if (show && !firstVisible) firstVisible = opt.value;
+            });
+            // Reset program if current selection is hidden
+            if (facId && programSelect.value && programSelect.querySelector('option[value="' + programSelect.value + '"]').style.display === 'none') {
+                programSelect.value = '';
+            }
+            filterCourses();
+        }
+
+        function filterCourses() {
+            var progId = programSelect.value;
+            var opts = courseSelect.querySelectorAll('option');
+            opts.forEach(function(opt) {
+                if (!opt.value) return;
+                var show = !progId || opt.dataset.program === progId;
+                opt.style.display = show ? '' : 'none';
+            });
+            if (progId && courseSelect.value && courseSelect.querySelector('option[value="' + courseSelect.value + '"]').style.display === 'none') {
+                courseSelect.value = '';
+                courseNameInput.value = '';
+            }
+        }
+
+        function updateCourseName() {
+            var sel = courseSelect.options[courseSelect.selectedIndex];
+            courseNameInput.value = sel ? (sel.dataset.name || sel.text) : '';
+        }
+
+        facultySelect.addEventListener('change', filterPrograms);
+        programSelect.addEventListener('change', filterCourses);
+        courseSelect.addEventListener('change', updateCourseName);
+    })();
+    </script>
+    <?php
+}
+
+/**
+ * Handle admin submission of a new application.
+ * Hooked to: admin_post_nds_admin_create_application
+ */
+function nds_handle_admin_create_application() {
+    if (!current_user_can('manage_options')) {
+        wp_die('Unauthorized');
+    }
+
+    // Verify nonce
+    if (!isset($_POST['nds_admin_app_nonce']) || !wp_verify_nonce($_POST['nds_admin_app_nonce'], 'nds_admin_create_application')) {
+        wp_die('Security check failed. Please try again.');
+    }
+
+    global $wpdb;
+
+    $course_id   = intval($_POST['course_id'] ?? 0);
+    $course_name = sanitize_text_field($_POST['course_name'] ?? '');
+
+    if (!$course_id) {
+        wp_die('Please select a qualification before submitting.');
+    }
+    if (empty($course_name)) {
+        // Fallback: fetch from DB
+        $course_row  = $wpdb->get_var($wpdb->prepare("SELECT name FROM {$wpdb->prefix}nds_courses WHERE id = %d", $course_id));
+        $course_name = $course_row ? $course_row : 'Unknown Course';
+    }
+
+    // Handle file uploads (optional – same logic as frontend, but skipped if not provided)
+    $plugin_dir     = plugin_dir_path(dirname(__FILE__));
+    $temp_upload_dir = $plugin_dir . 'public/temp-uploads/';
+    if (!file_exists($temp_upload_dir)) {
+        wp_mkdir_p($temp_upload_dir);
+    }
+
+    $file_fields = array(
+        'id_passport_applicant', 'id_passport_responsible', 'saqa_certificate',
+        'study_permit', 'parent_spouse_id', 'latest_results', 'proof_residence',
+        'highest_grade_cert', 'proof_medical_aid',
+    );
+    $temp_uploaded_files = array();
+    foreach ($file_fields as $field) {
+        if (isset($_FILES[$field]) && $_FILES[$field]['error'] === UPLOAD_ERR_OK) {
+            $file     = $_FILES[$field];
+            $file_ext = strtolower(pathinfo($file['name'], PATHINFO_EXTENSION));
+            if ($file_ext !== 'pdf') { continue; }
+            $unique_filename = $field . '_' . time() . '_' . uniqid() . '.pdf';
+            $temp_file_path  = $temp_upload_dir . $unique_filename;
+            if (move_uploaded_file($file['tmp_name'], $temp_file_path)) {
+                $temp_uploaded_files[$field] = array(
+                    'temp_path'     => $temp_file_path,
+                    'original_name' => sanitize_file_name(pathinfo($file['name'], PATHINFO_FILENAME)),
+                    'unique_name'   => $unique_filename,
+                );
+            }
+        }
+    }
+
+    // Build form data (same fields as nds_handle_application_form_submission)
+    $data = array(
+        'level'                      => sanitize_text_field($_POST['level'] ?? ''),
+        'course_id'                  => $course_id,
+        'course_name'                => $course_name,
+        'full_name'                  => sanitize_text_field($_POST['full_name'] ?? ''),
+        'id_number'                  => sanitize_text_field($_POST['id_number'] ?? ''),
+        'date_of_birth'              => sanitize_text_field($_POST['date_of_birth'] ?? ''),
+        'gender'                     => sanitize_text_field($_POST['gender'] ?? ''),
+        'nationality'                => mb_substr(sanitize_text_field($_POST['nationality'] ?? ''), 0, 100),
+        'country_of_birth'           => sanitize_text_field($_POST['country_of_birth'] ?? ''),
+        'marital_status'             => sanitize_text_field($_POST['marital_status'] ?? ''),
+        'street_address'             => sanitize_textarea_field($_POST['street_address'] ?? ''),
+        'city'                       => sanitize_text_field($_POST['city'] ?? ''),
+        'postal_code'                => sanitize_text_field($_POST['postal_code'] ?? ''),
+        'province'                   => sanitize_text_field($_POST['province'] ?? ''),
+        'cell_no'                    => sanitize_text_field($_POST['cell_no'] ?? ''),
+        'email'                      => sanitize_email($_POST['email'] ?? ''),
+        'responsible_full_name'      => sanitize_text_field($_POST['responsible_full_name'] ?? ''),
+        'relationship'               => sanitize_text_field($_POST['relationship'] ?? ''),
+        'responsible_id_number'      => sanitize_text_field($_POST['responsible_id_number'] ?? ''),
+        'responsible_phone'          => sanitize_text_field($_POST['responsible_phone'] ?? ''),
+        'responsible_email'          => sanitize_email($_POST['responsible_email'] ?? ''),
+        'responsible_street_address' => sanitize_textarea_field($_POST['responsible_street_address'] ?? ''),
+        'responsible_city'           => sanitize_text_field($_POST['responsible_city'] ?? ''),
+        'responsible_postal_code'    => sanitize_text_field($_POST['responsible_postal_code'] ?? ''),
+        'responsible_province'       => sanitize_text_field($_POST['responsible_province'] ?? ''),
+        'occupation'                 => sanitize_text_field($_POST['occupation'] ?? ''),
+        'company_name'               => sanitize_text_field($_POST['company_name'] ?? ''),
+        'work_telephone'             => sanitize_text_field($_POST['work_telephone'] ?? ''),
+        'work_email'                 => sanitize_email($_POST['work_email'] ?? ''),
+        'emergency_full_name'        => sanitize_text_field($_POST['emergency_full_name'] ?? ''),
+        'emergency_relationship'     => sanitize_text_field($_POST['emergency_relationship'] ?? ''),
+        'emergency_phone'            => sanitize_text_field($_POST['emergency_phone'] ?? ''),
+        'emergency_email'            => sanitize_email($_POST['emergency_email'] ?? ''),
+        'emergency_street_address'   => sanitize_textarea_field($_POST['emergency_street_address'] ?? ''),
+        'emergency_city'             => sanitize_text_field($_POST['emergency_city'] ?? ''),
+        'emergency_postal_code'      => sanitize_text_field($_POST['emergency_postal_code'] ?? ''),
+        'emergency_province'         => sanitize_text_field($_POST['emergency_province'] ?? ''),
+        'highest_grade'              => sanitize_text_field($_POST['highest_grade'] ?? ''),
+        'year_passed'                => sanitize_text_field($_POST['year_passed'] ?? ''),
+        'school_attended'            => sanitize_text_field($_POST['school_attended'] ?? ''),
+        'school_location'            => sanitize_text_field($_POST['school_location'] ?? ''),
+        'other_qualifications'       => sanitize_text_field($_POST['other_qualifications'] ?? ''),
+        'year_completion'            => sanitize_text_field($_POST['year_completion'] ?? ''),
+        'home_language'              => sanitize_text_field($_POST['home_language'] ?? ''),
+        'english_write'              => sanitize_text_field($_POST['english_write'] ?? 'Good'),
+        'english_read'               => sanitize_text_field($_POST['english_read'] ?? 'Good'),
+        'english_speak'              => sanitize_text_field($_POST['english_speak'] ?? 'Good'),
+        'other_language'             => sanitize_text_field($_POST['other_language'] ?? ''),
+        'other_language_write'       => sanitize_text_field($_POST['other_language_write'] ?? 'Good'),
+        'other_language_read'        => sanitize_text_field($_POST['other_language_read'] ?? 'Good'),
+        'other_language_speak'       => sanitize_text_field($_POST['other_language_speak'] ?? 'Good'),
+        'physical_illness'           => sanitize_text_field($_POST['physical_illness'] ?? 'No'),
+        'specify_physical_illness'   => sanitize_textarea_field($_POST['specify_physical_illness'] ?? ''),
+        'food_allergies'             => sanitize_text_field($_POST['food_allergies'] ?? 'No'),
+        'specify_food_allergies'     => sanitize_textarea_field($_POST['specify_food_allergies'] ?? ''),
+        'chronic_medication'         => sanitize_text_field($_POST['chronic_medication'] ?? 'No'),
+        'specify_chronic_medication' => sanitize_textarea_field($_POST['specify_chronic_medication'] ?? ''),
+        'pregnant_or_planning'       => sanitize_text_field($_POST['pregnant_or_planning'] ?? 'No'),
+        'smoke'                      => sanitize_text_field($_POST['smoke'] ?? 'No'),
+        'id_passport_applicant'      => '',
+        'id_passport_responsible'    => '',
+        'saqa_certificate'           => '',
+        'study_permit'               => '',
+        'parent_spouse_id'           => '',
+        'latest_results'             => '',
+        'proof_residence'            => '',
+        'highest_grade_cert'         => '',
+        'proof_medical_aid'          => '',
+        'declaration'                => 1, // Admin is submitting on behalf, so declaration is implied
+        'motivation_letter'          => sanitize_textarea_field($_POST['motivation_letter'] ?? ''),
+        'status'                     => 'pending',
+    );
+
+    // Set temp file paths for uploaded docs
+    foreach ($temp_uploaded_files as $field => $info) {
+        $data[$field] = $info['unique_name'];
+    }
+
+    $wpdb->query('START TRANSACTION');
+    try {
+        $forms_table = $wpdb->prefix . 'nds_application_forms';
+        $inserted = $wpdb->insert($forms_table, $data);
+        if (!$inserted) {
+            throw new Exception('Failed to insert application form data: ' . $wpdb->last_error);
+        }
+        $application_form_id = $wpdb->insert_id;
+
+        $application_no = 'APP-' . date('Y') . '-' . str_pad($application_form_id, 6, '0', STR_PAD_LEFT);
+
+        // Resolve program / faculty from course
+        $course_info = $wpdb->get_row($wpdb->prepare(
+            "SELECT c.program_id, p.faculty_id
+             FROM {$wpdb->prefix}nds_courses c
+             JOIN {$wpdb->prefix}nds_programs p ON c.program_id = p.id
+             WHERE c.id = %d",
+            $course_id
+        ), ARRAY_A);
+        $program_id = $course_info ? $course_info['program_id'] : null;
+
+        $application_data = array(
+            'application_no' => $application_no,
+            'wp_user_id'     => get_current_user_id() ?: null,
+            'student_id'     => null,
+            'program_id'     => $program_id,
+            'course_id'      => $course_id,
+            'source'         => 'admin',
+            'status'         => 'submitted',
+            'submitted_at'   => current_time('mysql'),
+            'notes'          => 'Application submitted by admin on behalf of student',
+            'created_at'     => current_time('mysql'),
+        );
+
+        $app_inserted = $wpdb->insert($wpdb->prefix . 'nds_applications', $application_data);
+        if (!$app_inserted) {
+            throw new Exception('Failed to insert application record: ' . $wpdb->last_error);
+        }
+        $application_id = $wpdb->insert_id;
+
+        // Link form to application
+        $wpdb->update($forms_table, array('application_id' => $application_id), array('id' => $application_form_id));
+
+        $wpdb->query('COMMIT');
+
+        wp_redirect(admin_url('admin.php?page=nds-applicants&app_created=1'));
+        exit;
+    } catch (Exception $e) {
+        $wpdb->query('ROLLBACK');
+        // Clean up any uploaded temp files
+        foreach ($temp_uploaded_files as $info) {
+            if (file_exists($info['temp_path'])) {
+                @unlink($info['temp_path']);
+            }
+        }
+        wp_die('Error creating application: ' . esc_html($e->getMessage()));
+    }
+}
+add_action('admin_post_nds_admin_create_application', 'nds_handle_admin_create_application');

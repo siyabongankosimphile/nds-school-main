@@ -63,7 +63,7 @@ if (!$staff) {
 $staff_data = (array) $staff;
 $full_name = trim(($staff_data['first_name'] ?? '') . ' ' . ($staff_data['last_name'] ?? ''));
 
-// Get courses this staff member teaches
+// Get courses this staff member teaches (course-level assignments)
 $courses_taught = $wpdb->get_results(
     $wpdb->prepare(
         "
@@ -78,6 +78,34 @@ $courses_taught = $wpdb->get_results(
     ),
     ARRAY_A
 );
+
+// Also include courses derived from module-level assignments (Module Management)
+$module_assigned_course_ids = function_exists('nds_staff_get_lecturer_course_ids_from_modules')
+    ? nds_staff_get_lecturer_course_ids_from_modules($staff_id)
+    : array();
+
+if (!empty($module_assigned_course_ids)) {
+    $existing_course_ids = array_map('intval', array_column($courses_taught, 'id'));
+    $new_course_ids = array_filter($module_assigned_course_ids, function($cid) use ($existing_course_ids) {
+        return !in_array((int) $cid, $existing_course_ids, true);
+    });
+    if (!empty($new_course_ids)) {
+        $new_ids_placeholder = implode(',', array_map('intval', $new_course_ids));
+        $module_courses = $wpdb->get_results(
+            "SELECT c.*, NULL AS assigned_at
+             FROM {$wpdb->prefix}nds_courses c
+             WHERE c.id IN ($new_ids_placeholder) AND c.status = 'active'
+             ORDER BY c.name ASC",
+            ARRAY_A
+        );
+        $courses_taught = array_merge($courses_taught, $module_courses ?: array());
+    }
+}
+
+// Get assigned module IDs for this lecturer (module-level filter)
+$assigned_module_ids = function_exists('nds_staff_get_lecturer_module_ids')
+    ? nds_staff_get_lecturer_module_ids($staff_id)
+    : array();
 
 // Get course IDs for filtering
 $course_ids = array_column($courses_taught, 'id');
