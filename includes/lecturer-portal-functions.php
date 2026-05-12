@@ -225,6 +225,10 @@ function nds_staff_normalize_access_grouping($raw_value) {
     return in_array($value, array('all', 'cohorts'), true) ? $value : 'all';
 }
 
+function nds_staff_portal_schema_version() {
+    return '2026-05-12-1';
+}
+
 function nds_staff_ensure_portal_tables() {
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
@@ -431,11 +435,13 @@ function nds_staff_ensure_portal_tables() {
 }
 
 add_action('init', function () {
-    if (get_transient('nds_staff_portal_tables_checked')) {
+    $schema_version = nds_staff_portal_schema_version();
+    if (get_option('nds_staff_portal_schema_version') === $schema_version) {
         return;
     }
+
     nds_staff_ensure_portal_tables();
-    set_transient('nds_staff_portal_tables_checked', 1, 10 * MINUTE_IN_SECONDS);
+    update_option('nds_staff_portal_schema_version', $schema_version, false);
 }, 2);
 
 add_action('admin_post_nds_staff_create_content', function () {

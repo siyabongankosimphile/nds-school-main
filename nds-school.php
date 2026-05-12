@@ -2737,6 +2737,12 @@ add_filter('query_vars', function ($vars) {
     $vars[] = 'nds_program_id';
     // Portal query var for /portal/
     $vars[] = 'nds_portal';
+    // Module detail query var for /portal/module/<id>/
+    $vars[] = 'nds_portal_module';
+    // Quiz interface query var for /portal/quiz/<id>/
+    $vars[] = 'nds_portal_quiz';
+    // Online application query var for /online-application/
+    $vars[] = 'nds_online_application';
     // Staff portal query var for /staff-portal/
     $vars[] = 'nds_staff_portal';
     // Application administrator portal query var for /administrator-portal/
@@ -2828,12 +2834,26 @@ register_deactivation_hook(__FILE__, 'nds_school_deactivate');
 add_action('init', function () {
     // Keep the existing /portal/ rewrite, but route it to a lean, learner-only dashboard
     add_rewrite_rule('^portal/?$', 'index.php?nds_portal=1', 'top');
+    // Module detail page: /portal/module/<id>/
+    add_rewrite_rule('^portal/module/([0-9]+)/?$', 'index.php?nds_portal_module=$matches[1]', 'top');
+    // Quiz interface page: /portal/quiz/<id>/
+    add_rewrite_rule('^portal/quiz/([0-9]+)/?$', 'index.php?nds_portal_quiz=$matches[1]', 'top');
+    // Public online application route
+    add_rewrite_rule('^online-application/?$', 'index.php?nds_online_application=1', 'top');
     // Staff portal route
     add_rewrite_rule('^staff-portal/?$', 'index.php?nds_staff_portal=1', 'top');
     // Application administrator portal route
     add_rewrite_rule('^administrator-portal/?$', 'index.php?nds_admin_portal=1', 'top');
     // Timetable coordinator portal route
     add_rewrite_rule('^timetable-portal/?$', 'index.php?nds_timetable_portal=1', 'top');
+    
+    // One-time rewrite rules flush (check version)
+    $current_version = '2026-05-12-portal-routes-v2';
+    $flushed_version = get_option('nds_rewrite_rules_flushed_version');
+    if ($flushed_version !== $current_version) {
+        flush_rewrite_rules(false);
+        update_option('nds_rewrite_rules_flushed_version', $current_version);
+    }
 });
 
 add_action('template_redirect', function () {
@@ -2892,6 +2912,50 @@ add_action('template_redirect', function () {
 
     // Render a standalone full-screen learner dashboard (no theme header/nav)
     include plugin_dir_path(__FILE__) . 'templates/learner-portal.php';
+    exit;
+});
+
+add_action('template_redirect', function () {
+    $is_online_application = (int) get_query_var('nds_online_application');
+    if ($is_online_application !== 1) {
+        return;
+    }
+
+    include plugin_dir_path(__FILE__) . 'includes/applicationForm.php';
+    exit;
+});
+
+// Module detail page: /portal/module/<id>/
+add_action('template_redirect', function () {
+    $module_id = (int) get_query_var('nds_portal_module');
+    if ($module_id <= 0) {
+        return;
+    }
+
+    // Require login
+    if (!is_user_logged_in()) {
+        wp_safe_redirect(wp_login_url(home_url('/portal/')));
+        exit;
+    }
+
+    include plugin_dir_path(__FILE__) . 'templates/module-detail.php';
+    exit;
+});
+
+// Quiz interface page: /portal/quiz/<id>/
+add_action('template_redirect', function () {
+    $content_id = (int) get_query_var('nds_portal_quiz');
+    if ($content_id <= 0) {
+        return;
+    }
+
+    // Require login
+    if (!is_user_logged_in()) {
+        wp_safe_redirect(wp_login_url(home_url('/portal/')));
+        exit;
+    }
+
+    include plugin_dir_path(__FILE__) . 'templates/quiz-interface.php';
     exit;
 });
 
@@ -3411,6 +3475,14 @@ add_action('init', function () {
         update_option('nds_admin_portal_rules_flushed', 1);
     }
 }, 102);
+
+// Force flush rewrite rules on next page load (one-time for online application route)
+add_action('init', function () {
+    if (!get_option('nds_online_application_rules_flushed')) {
+        flush_rewrite_rules(false);
+        update_option('nds_online_application_rules_flushed', 1);
+    }
+}, 103);
 
 // -----------------------------
 // Student Portal helpers & AJAX

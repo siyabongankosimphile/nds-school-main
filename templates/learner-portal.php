@@ -2126,14 +2126,7 @@ $unread_count = count($unread_notifications);
                                                                 <div class="mt-1.5 flex gap-3 text-xs">
                                                                     <?php if ($ctype === 'quiz') : ?>
                                                                         <?php
-                                                                        $open_quiz_url = add_query_arg(
-                                                                            array(
-                                                                                'tab' => 'courses',
-                                                                                'module_id' => (int) $selected_module['module_id'],
-                                                                                'quiz_content_id' => (int) ($content_item['id'] ?? 0),
-                                                                            ),
-                                                                            home_url('/portal/')
-                                                                        );
+                                                                        $open_quiz_url = home_url('/portal/quiz/' . (int) ($content_item['id'] ?? 0) . '/');
                                                                         ?>
                                                                         <a href="<?php echo esc_url($open_quiz_url); ?>" class="text-indigo-600 hover:underline font-medium nds-track-content-view" data-content-id="<?php echo (int) ($content_item['id'] ?? 0); ?>" data-view-type="open_quiz">Open quiz</a>
                                                                     <?php endif; ?>
@@ -2246,13 +2239,14 @@ $unread_count = count($unread_notifications);
                                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                                             <?php foreach ($course_mods as $card_mod) :
                                                 $card_link = add_query_arg(array('tab'=>'courses','module_id'=>(int)$card_mod['module_id']), home_url('/portal/'));
+                                                $module_detail_link = home_url('/portal/module/' . (int)$card_mod['module_id'] . '/');
                                                 $banner    = $card_banner_colors[$card_idx % count($card_banner_colors)];
                                                 $n_content = count($card_mod['content_rows'] ?? array());
                                                 $n_assess  = count($card_mod['assessment_rows'] ?? array());
                                                 $card_idx++;
                                             ?>
-                                                <a href="<?php echo esc_url($card_link); ?>"
-                                                   class="group block bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 overflow-hidden">
+                                                <div class="group block bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 overflow-hidden cursor-pointer"
+                                                     onclick="window.location.href='<?php echo esc_url($module_detail_link); ?>'">
                                                     <!-- Coloured banner -->
                                                     <div class="<?php echo esc_attr($banner); ?> h-28 relative overflow-hidden">
                                                         <div class="absolute inset-0 opacity-20" style="background-image:radial-gradient(circle,#fff 1px,transparent 1px);background-size:22px 22px;"></div>
@@ -2284,9 +2278,9 @@ $unread_count = count($unread_notifications);
                                                                 <span><i class="fas fa-tasks mr-1"></i><?php echo $n_assess; ?></span>
                                                             <?php endif; ?>
                                                         </div>
-                                                        <i class="fas fa-ellipsis-v text-gray-300 group-hover:text-gray-500 transition-colors"></i>
+                                                        <i class="fas fa-arrow-right text-gray-300 group-hover:text-gray-500 transition-colors"></i>
                                                     </div>
-                                                </a>
+                                                </div>
                                             <?php endforeach; ?>
                                         </div>
                                     </div>
