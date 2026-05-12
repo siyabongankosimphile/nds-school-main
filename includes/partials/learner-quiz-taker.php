@@ -124,6 +124,7 @@ $time_limit_minutes = isset($quiz['time_limit']) ? (int) $quiz['time_limit'] : 0
 (function() {
     const form = document.getElementById('quiz-submit-form');
     if (!form) return;
+    const ajaxEndpoint = <?php echo wp_json_encode(esc_url(admin_url('admin-ajax.php'))); ?>;
 
     let timeLeft = <?php echo (int) ($time_limit_minutes * 60); ?>;
     let timerInterval;
@@ -219,7 +220,7 @@ $time_limit_minutes = isset($quiz['time_limit']) ? (int) $quiz['time_limit'] : 0
     form.addEventListener('submit', function(e) {
         e.preventDefault();
         const formData = new FormData(form);
-        fetch(form.action, {
+        fetch(ajaxEndpoint, {
             method: 'POST',
             body: formData
         })

@@ -95,7 +95,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nds_update_content_id
             $quiz_questions_input = isset($_POST['questions']) && is_array($_POST['questions']) ? array_values(array_filter(array_map('intval', $_POST['questions']))) : [];
             $quiz_marks_input = isset($_POST['marks']) && is_array($_POST['marks']) ? $_POST['marks'] : [];
 
-            $file_url = (string) ($existing_item['file_url'] ?? '');
+            $file_url = (string) ($existing_item['attachment_url'] ?? '');
             $file_name = (string) ($existing_item['file_name'] ?? '');
             $file_size = (int) ($existing_item['file_size'] ?? 0);
             $file_type = (string) ($existing_item['file_type'] ?? '');
@@ -157,7 +157,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nds_update_content_id
                         'description' => $description,
                         'content_type' => $content_type,
                         'module_id' => $module_id ?: null,
-                        'file_url' => $file_url,
+                        'attachment_url' => $file_url,
                         'file_name' => $file_name,
                         'file_size' => $file_size,
                         'file_type' => $file_type,
@@ -413,7 +413,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['nds_submit_content'])
                 'course_id' => $course_id,
                 'module_id' => $module_id ?: null,
                 'staff_id' => $staff_id,
-                'file_url' => $file_url ?: $resource_url,
+                'attachment_url' => $file_url ?: $resource_url,
                 'file_name' => $file_name,
                 'file_size' => $file_size,
                 'file_type' => $file_type,
@@ -580,7 +580,7 @@ $to_datetime_local = static function ($value) {
 $form_title = isset($_POST['content_title']) ? sanitize_text_field(wp_unslash($_POST['content_title'])) : (string) ($selected_content_item['title'] ?? '');
 $form_description = isset($_POST['content_description']) ? wp_kses_post(wp_unslash($_POST['content_description'])) : (string) ($selected_content_item['description'] ?? '');
 $form_module_id = isset($_POST['module_id']) ? (int) $_POST['module_id'] : (int) ($selected_content_item['module_id'] ?? 0);
-$form_resource_url = isset($_POST['resource_url']) ? sanitize_url(wp_unslash($_POST['resource_url'])) : (string) ($selected_content_item['file_url'] ?? '');
+$form_resource_url = isset($_POST['resource_url']) ? sanitize_url(wp_unslash($_POST['resource_url'])) : (string) ($selected_content_item['attachment_url'] ?? '');
 $form_access_start = isset($_POST['access_start']) ? sanitize_text_field(wp_unslash($_POST['access_start'])) : $to_datetime_local($selected_content_item['access_start'] ?? '');
 $form_access_end = isset($_POST['access_end']) ? sanitize_text_field(wp_unslash($_POST['access_end'])) : $to_datetime_local($selected_content_item['access_end'] ?? '');
 $form_visible = isset($_POST['is_visible']) ? 1 : (int) ($selected_content_item['is_visible'] ?? 1);
@@ -1010,10 +1010,10 @@ if ($is_item_page && $selected_content_type === 'quiz' && $form_quiz_id > 0) {
                             </div>
                         </div>
 
-                        <?php if ($is_item_page && !empty($selected_content_item['file_url'])): ?>
+                        <?php if ($is_item_page && !empty($selected_content_item['attachment_url'])): ?>
                         <div class="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm">
                             <p class="font-medium text-gray-700">Current attachment/link:</p>
-                            <a class="text-blue-600 break-all" href="<?php echo esc_url($selected_content_item['file_url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html($selected_content_item['file_name'] ?: $selected_content_item['file_url']); ?></a>
+                            <a class="text-blue-600 break-all" href="<?php echo esc_url($selected_content_item['attachment_url']); ?>" target="_blank" rel="noopener noreferrer"><?php echo esc_html($selected_content_item['file_name'] ?: $selected_content_item['attachment_url']); ?></a>
                         </div>
                         <?php endif; ?>
                         
@@ -1139,11 +1139,11 @@ if ($is_item_page && $selected_content_type === 'quiz' && $form_quiz_id > 0) {
                                                 <a href="<?php echo esc_url($item_page_url); ?>" class="text-indigo-600 hover:text-indigo-800 px-2 py-1 rounded border border-indigo-200 text-xs font-medium" title="Open item page">
                                                     View
                                                 </a>
-                                                <?php if ($item['file_url']): ?>
-                                                    <a href="<?php echo esc_url($item['file_url']); ?>" target="_blank" class="text-blue-600 hover:text-blue-800 p-1" title="Preview">
+                                                <?php if ($item['attachment_url']): ?>
+                                                    <a href="<?php echo esc_url($item['attachment_url']); ?>" target="_blank" class="text-blue-600 hover:text-blue-800 p-1" title="Preview">
                                                         <i class="fas fa-eye"></i>
                                                     </a>
-                                                    <a href="<?php echo esc_url($item['file_url']); ?>" download class="text-green-600 hover:text-green-800 p-1" title="Download">
+                                                    <a href="<?php echo esc_url($item['attachment_url']); ?>" download class="text-green-600 hover:text-green-800 p-1" title="Download">
                                                         <i class="fas fa-download"></i>
                                                     </a>
                                                 <?php endif; ?>
