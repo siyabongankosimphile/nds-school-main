@@ -1335,10 +1335,7 @@ $unread_count = count($unread_notifications);
                                             $event_type = (string) ($timeline_row['type'] ?? 'assessment');
                                             $event_css  = $event_type === 'assignment' ? 'text-orange-700' : ($event_type === 'quiz' ? 'text-indigo-700' : 'text-slate-700');
                                             $event_icon = $event_type === 'assignment' ? 'fa-file-alt' : ($event_type === 'quiz' ? 'fa-question-circle' : 'fa-book');
-                                            $module_link = add_query_arg(
-                                                array('tab' => 'courses', 'module_id' => (int) $timeline_row['module_id']),
-                                                home_url('/portal/')
-                                            );
+                                            $module_link = home_url('/portal/module/' . (int) $timeline_row['module_id'] . '/');
                                             ?>
                                             <div class="nds-timeline-item py-4"
                                                  data-ts="<?php echo esc_attr((int) $timeline_row['due_ts']); ?>"
@@ -1373,10 +1370,7 @@ $unread_count = count($unread_notifications);
                                     <div class="space-y-2 mb-4">
                                         <?php foreach ($course_modules as $module_item) : ?>
                                             <?php
-                                            $module_link = add_query_arg(
-                                                array('tab' => 'courses', 'module_id' => (int) $module_item['module_id']),
-                                                home_url('/portal/')
-                                            );
+                                            $module_link = home_url('/portal/module/' . (int) $module_item['module_id'] . '/');
                                             ?>
                                             <a href="<?php echo esc_url($module_link); ?>" class="w-full text-left flex items-center gap-2 text-lg font-medium text-black hover:text-slate-700">
                                                 <i class="fas fa-graduation-cap text-xl text-slate-700"></i>
