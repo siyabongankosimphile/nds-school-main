@@ -374,19 +374,18 @@ function nds_add_staff()
         exit;
     }
 
-    if ($is_lecturer && !empty($lecturer_assignments)) {
-        foreach ($lecturer_assignments as $assignment) {
-            $wpdb->query($wpdb->prepare(
-                "INSERT IGNORE INTO {$wpdb->prefix}nds_course_lecturers (course_id, lecturer_id) VALUES (%d, %d)",
-                intval($assignment['course_id']),
-                intval($wpdb->insert_id)
-            ));
+    $new_staff_id = intval($wpdb->insert_id);
+    if ($new_staff_id > 0) {
+        if ($is_lecturer) {
+            nds_sync_staff_lecturer_assignments($new_staff_id, $lecturer_assignments);
+        } else {
+            nds_sync_staff_lecturer_assignments($new_staff_id, array());
         }
     }
 
     // Redirect after successful insertion
     // Log create action
-    nds_log_staff_action($wpdb->insert_id, get_current_user_id(), 'create_staff', 'create', null, wp_json_encode($staff_insert_data));
+    nds_log_staff_action($new_staff_id, get_current_user_id(), 'create_staff', 'create', null, wp_json_encode($staff_insert_data));
 
     wp_redirect(admin_url('admin.php?page=nds-staff-management&success=staff_created'));
     exit;
