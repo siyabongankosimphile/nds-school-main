@@ -226,7 +226,7 @@ if (!empty($registration_application) && empty($registration_application['course
         }
     }
 }
-// Also resolve program_id from course if missing
+// Resolve program_id from course if missing (do this even if course_id was just resolved above)
 if (!empty($registration_application) && empty($registration_application['program_id']) && !empty($registration_application['course_id'])) {
     $registration_application['program_id'] = (int) $wpdb->get_var($wpdb->prepare(
         "SELECT program_id FROM {$wpdb->prefix}nds_courses WHERE id = %d",
@@ -267,19 +267,28 @@ if ($can_show_registration_panel) {
         $registration_modules = $wpdb->get_results($wpdb->prepare(
             "SELECT m.id, {$module_code_expr}, m.name, m.type
              FROM {$wpdb->prefix}nds_modules m
-             WHERE course_id = %d
+             WHERE course_id = %d AND m.status = 'active'
              ORDER BY name ASC",
             $registration_course_id
         ), ARRAY_A);
     }
 
-    // Fallback: if no direct modules, pull modules from ALL courses in the program
+    // Fallback 1: if no direct modules, try pulling modules from the course's program
+    if (empty($registration_modules) && $registration_program_id <= 0 && $registration_course_id > 0) {
+        // If program_id wasn't set, resolve it now
+        $registration_program_id = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT program_id FROM {$wpdb->prefix}nds_courses WHERE id = %d",
+            $registration_course_id
+        ));
+    }
+
+    // Fallback 2: if still no modules, pull modules from ALL courses in the program
     if (empty($registration_modules) && $registration_program_id > 0) {
         $registration_modules = $wpdb->get_results($wpdb->prepare(
             "SELECT m.id, {$module_code_expr}, m.name, m.type
              FROM {$wpdb->prefix}nds_modules m
              INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
-             WHERE c.program_id = %d AND c.status = 'active'
+             WHERE c.program_id = %d AND c.status = 'active' AND m.status = 'active'
              ORDER BY m.name ASC",
             $registration_program_id
         ), ARRAY_A);
