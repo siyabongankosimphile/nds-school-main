@@ -2333,6 +2333,7 @@ document.addEventListener('DOMContentLoaded', function() {
         syncSelectAllState();
 
         registrationAction.addEventListener('change', syncRegistrationActionUI);
+        registrationAction.addEventListener('input', syncRegistrationActionUI);
 
         if (selectAllModules) {
             selectAllModules.addEventListener('change', function () {
@@ -2349,6 +2350,9 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         registrationRun.addEventListener('click', function () {
+            // Failsafe: Ensure UI is synced before checking modules
+            syncRegistrationActionUI();
+            
             const selectedAction = registrationAction.value;
             const courseId = registrationPanel.getAttribute('data-course-id');
             const nonce = registrationPanel.getAttribute('data-nonce');
@@ -2360,6 +2364,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const selectedModuleInputs = Array.from(document.querySelectorAll('.nds-module-pick:checked'));
             const selectedModuleIds = selectedModuleInputs.map(function (el) { return el.value; });
+
+            // Show the module wrap if this action needs modules
+            if ((selectedAction === 'submit_registration' || selectedAction === 'add_module' || selectedAction === 'cancel_module')) {
+                registrationModuleWrap.classList.remove('hidden');
+            }
 
             if ((selectedAction === 'submit_registration' || selectedAction === 'add_module' || selectedAction === 'cancel_module') && selectedModuleIds.length === 0) {
                 setRegistrationFeedback('Please select at least one module for this action.', true);
