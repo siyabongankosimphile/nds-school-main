@@ -2367,7 +2367,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
             // Show the module wrap if this action needs modules
             if ((selectedAction === 'submit_registration' || selectedAction === 'add_module' || selectedAction === 'cancel_module')) {
-                registrationModuleWrap.classList.remove('hidden');
+                const moduleWrap = document.querySelector('#nds-registration-module-wrap');
+                if (moduleWrap) {
+                    moduleWrap.classList.remove('hidden');
+                }
             }
 
             if ((selectedAction === 'submit_registration' || selectedAction === 'add_module' || selectedAction === 'cancel_module') && selectedModuleIds.length === 0) {
