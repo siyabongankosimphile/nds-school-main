@@ -226,7 +226,7 @@ function nds_staff_normalize_access_grouping($raw_value) {
 }
 
 function nds_staff_portal_schema_version() {
-    return '2026-05-12-1';
+    return '2026-05-12-2';
 }
 
 function nds_staff_ensure_portal_tables() {
@@ -249,6 +249,7 @@ function nds_staff_ensure_portal_tables() {
         attempts_allowed INT DEFAULT 1,
         shuffle_questions TINYINT(1) DEFAULT 0,
         pass_percentage DECIMAL(5,2) NULL,
+        allow_review_after_submit TINYINT(1) DEFAULT 1,
         resource_url VARCHAR(500) NULL,
         attachment_url VARCHAR(500) NULL,
         due_date DATE NULL,
@@ -281,6 +282,7 @@ function nds_staff_ensure_portal_tables() {
         'attempts_allowed'    => "ALTER TABLE {$t_content} ADD COLUMN attempts_allowed INT DEFAULT 1 AFTER time_limit_minutes",
         'shuffle_questions'   => "ALTER TABLE {$t_content} ADD COLUMN shuffle_questions TINYINT(1) DEFAULT 0 AFTER attempts_allowed",
         'pass_percentage'     => "ALTER TABLE {$t_content} ADD COLUMN pass_percentage DECIMAL(5,2) NULL AFTER shuffle_questions",
+        'allow_review_after_submit' => "ALTER TABLE {$t_content} ADD COLUMN allow_review_after_submit TINYINT(1) DEFAULT 1 AFTER pass_percentage",
         'attachment_url'      => "ALTER TABLE {$t_content} ADD COLUMN attachment_url VARCHAR(500) NULL AFTER resource_url",
         'due_date'            => "ALTER TABLE {$t_content} ADD COLUMN due_date DATE NULL AFTER attachment_url",
         'is_visible'          => "ALTER TABLE {$t_content} ADD COLUMN is_visible TINYINT(1) DEFAULT 1 AFTER due_date",
@@ -493,6 +495,7 @@ add_action('admin_post_nds_staff_create_content', function () {
     $attempts_allowed = ($content_type === 'quiz' && isset($_POST['attempts_allowed']) && $_POST['attempts_allowed'] !== '') ? max(0, (int) $_POST['attempts_allowed']) : 1;
     $shuffle_questions = ($content_type === 'quiz' && !empty($_POST['shuffle_questions'])) ? 1 : 0;
     $pass_percentage = ($content_type === 'quiz' && isset($_POST['pass_percentage']) && $_POST['pass_percentage'] !== '') ? max(0.0, min(100.0, (float) $_POST['pass_percentage'])) : null;
+    $allow_review_after_submit = ($content_type === 'quiz' && isset($_POST['allow_review_after_submit'])) ? 1 : 0;
 
     // Sanitize and store quiz questions when content type is quiz
     $quiz_data = null;
@@ -546,6 +549,7 @@ add_action('admin_post_nds_staff_create_content', function () {
             'attempts_allowed' => $content_type === 'quiz' ? $attempts_allowed : null,
             'shuffle_questions' => $content_type === 'quiz' ? $shuffle_questions : 0,
             'pass_percentage' => $content_type === 'quiz' ? $pass_percentage : null,
+            'allow_review_after_submit' => $content_type === 'quiz' ? $allow_review_after_submit : 1,
             'resource_url' => $resource_url,
             'attachment_url' => $attachment_url,
             'due_date' => !empty($due_date) ? $due_date : null,
@@ -558,7 +562,7 @@ add_action('admin_post_nds_staff_create_content', function () {
             'allowed_cohort_ids' => $allowed_cohort_ids,
             'status' => 'published',
         ),
-        array('%d', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%s')
+        array('%d', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%d', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%s')
     );
 
     if ($result === false) {
@@ -656,6 +660,7 @@ add_action('admin_post_nds_staff_update_content', function () {
     $attempts_allowed = ($content_type === 'quiz' && isset($_POST['attempts_allowed']) && $_POST['attempts_allowed'] !== '') ? max(0, (int) $_POST['attempts_allowed']) : 1;
     $shuffle_questions = ($content_type === 'quiz' && !empty($_POST['shuffle_questions'])) ? 1 : 0;
     $pass_percentage = ($content_type === 'quiz' && isset($_POST['pass_percentage']) && $_POST['pass_percentage'] !== '') ? max(0.0, min(100.0, (float) $_POST['pass_percentage'])) : null;
+    $allow_review_after_submit = ($content_type === 'quiz' && isset($_POST['allow_review_after_submit'])) ? 1 : 0;
 
     $quiz_data = $existing['quiz_data'];
     if ($content_type === 'quiz' && !empty($_POST['quiz_data'])) {
@@ -712,6 +717,7 @@ add_action('admin_post_nds_staff_update_content', function () {
             'attempts_allowed' => $content_type === 'quiz' ? $attempts_allowed : null,
             'shuffle_questions' => $content_type === 'quiz' ? $shuffle_questions : 0,
             'pass_percentage' => $content_type === 'quiz' ? $pass_percentage : null,
+            'allow_review_after_submit' => $content_type === 'quiz' ? $allow_review_after_submit : 1,
             'resource_url' => $resource_url,
             'attachment_url' => $attachment_url,
             'due_date' => !empty($due_date) ? $due_date : null,
@@ -727,7 +733,7 @@ add_action('admin_post_nds_staff_update_content', function () {
             'id' => $content_id,
             'staff_id' => $staff_id,
         ),
-        array('%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s'),
+        array('%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%d', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s'),
         array('%d', '%d')
     );
 
@@ -1193,6 +1199,62 @@ add_action('admin_post_nds_staff_grade_submission', function () {
         array('%f', '%s', '%s', '%s', '%d'),
         array('%d')
     );
+
+    nds_staff_redirect_with_notice('assessment_notice', 'graded', 'assessments');
+});
+
+add_action('admin_post_nds_staff_grade_quiz_attempt', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_grade_quiz_attempt_nonce']) || !wp_verify_nonce($_POST['nds_staff_grade_quiz_attempt_nonce'], 'nds_staff_grade_quiz_attempt')) {
+        nds_staff_redirect_with_notice('assessment_error', 'security', 'assessments');
+    }
+
+    $quiz_attempt_id = isset($_POST['quiz_attempt_id']) ? (int) $_POST['quiz_attempt_id'] : 0;
+    if ($quiz_attempt_id <= 0 || !function_exists('nds_portal_ensure_quiz_attempts_table')) {
+        nds_staff_redirect_with_notice('assessment_error', 'missing_fields', 'assessments');
+    }
+
+    $score = isset($_POST['score_percent']) && $_POST['score_percent'] !== ''
+        ? max(0.0, min(100.0, (float) $_POST['score_percent']))
+        : null;
+    $feedback = isset($_POST['manual_feedback']) ? sanitize_textarea_field(wp_unslash($_POST['manual_feedback'])) : '';
+
+    global $wpdb;
+    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+    $attempt = $wpdb->get_row($wpdb->prepare(
+        "SELECT qa.id, qa.course_id, qa.module_id, lc.staff_id AS content_staff_id
+         FROM {$quiz_attempts_table} qa
+         INNER JOIN {$wpdb->prefix}nds_lecturer_content lc ON lc.id = qa.content_id
+         WHERE qa.id = %d
+         LIMIT 1",
+        $quiz_attempt_id
+    ), ARRAY_A);
+
+    if (empty($attempt) || (int) ($attempt['content_staff_id'] ?? 0) !== (int) $staff_id || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) ($attempt['course_id'] ?? 0))) {
+        nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
+    }
+    if ((int) ($attempt['module_id'] ?? 0) > 0 && !nds_staff_module_is_owned_by_lecturer($staff_id, (int) $attempt['module_id'])) {
+        nds_staff_redirect_with_notice('assessment_error', 'permission', 'assessments');
+    }
+
+    $updated = $wpdb->update(
+        $quiz_attempts_table,
+        array(
+            'score_percent' => $score,
+            'manual_feedback' => $feedback,
+            'requires_manual_grading' => 0,
+            'manually_graded_at' => current_time('mysql'),
+            'manually_graded_by' => $staff_id,
+        ),
+        array('id' => $quiz_attempt_id),
+        array('%f', '%s', '%d', '%s', '%d'),
+        array('%d')
+    );
+
+    if ($updated === false) {
+        nds_staff_redirect_with_notice('assessment_error', 'save_failed', 'assessments');
+    }
 
     nds_staff_redirect_with_notice('assessment_notice', 'graded', 'assessments');
 });

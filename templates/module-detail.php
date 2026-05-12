@@ -311,6 +311,56 @@ if (!defined('ABSPATH')) {
             
             return true;
         }));
+
+        $quiz_attempts_count_map = array();
+        $quiz_latest_attempt_map = array();
+        if (!empty($content) && function_exists('nds_portal_ensure_quiz_attempts_table')) {
+            $quiz_content_ids = array_values(array_filter(array_map(static function ($row) {
+                if (sanitize_key((string) ($row['content_type'] ?? '')) !== 'quiz') {
+                    return 0;
+                }
+                return (int) ($row['id'] ?? 0);
+            }, $content), static function ($id) {
+                return $id > 0;
+            }));
+
+            if (!empty($quiz_content_ids)) {
+                $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+                $quiz_placeholders = implode(',', array_fill(0, count($quiz_content_ids), '%d'));
+
+                $count_rows = $wpdb->get_results($wpdb->prepare(
+                    "SELECT content_id, COUNT(*) AS attempt_count
+                     FROM {$quiz_attempts_table}
+                     WHERE student_id = %d
+                       AND content_id IN ({$quiz_placeholders})
+                     GROUP BY content_id",
+                    array_merge(array($student_id), $quiz_content_ids)
+                ), ARRAY_A);
+
+                foreach ($count_rows as $count_row) {
+                    $quiz_attempts_count_map[(int) ($count_row['content_id'] ?? 0)] = (int) ($count_row['attempt_count'] ?? 0);
+                }
+
+                $latest_rows = $wpdb->get_results($wpdb->prepare(
+                    "SELECT qa.content_id, qa.score_percent, qa.submitted_at, lc.pass_percentage, lc.min_grade_required
+                     FROM {$quiz_attempts_table} qa
+                     INNER JOIN (
+                        SELECT content_id, MAX(attempt_no) AS last_attempt_no
+                        FROM {$quiz_attempts_table}
+                        WHERE student_id = %d
+                          AND content_id IN ({$quiz_placeholders})
+                        GROUP BY content_id
+                     ) latest ON latest.content_id = qa.content_id AND latest.last_attempt_no = qa.attempt_no
+                     INNER JOIN {$wpdb->prefix}nds_lecturer_content lc ON lc.id = qa.content_id
+                     WHERE qa.student_id = %d",
+                    array_merge(array($student_id), $quiz_content_ids, array($student_id))
+                ), ARRAY_A);
+
+                foreach ($latest_rows as $latest_row) {
+                    $quiz_latest_attempt_map[(int) ($latest_row['content_id'] ?? 0)] = $latest_row;
+                }
+            }
+        }
         
         ?>
         
@@ -337,6 +387,10 @@ if (!defined('ABSPATH')) {
                     $due_date = $item['due_date'] ? date('F j, Y', strtotime($item['due_date'])) : '';
                     $time_limit = isset($item['time_limit_minutes']) && $item['time_limit_minutes'] > 0 ? (int) $item['time_limit_minutes'] : 0;
                     $attempts = isset($item['attempts_allowed']) ? (int) $item['attempts_allowed'] : 1;
+                    $attempts_used = isset($quiz_attempts_count_map[$content_id]) ? (int) $quiz_attempts_count_map[$content_id] : 0;
+                    $attempts_remaining = $attempts > 0 ? max(0, $attempts - $attempts_used) : -1;
+                    $quiz_locked = $content_type === 'quiz' && $attempts > 0 && $attempts_remaining <= 0;
+                    $latest_attempt = isset($quiz_latest_attempt_map[$content_id]) ? $quiz_latest_attempt_map[$content_id] : null;
                     
                     $card_class = 'nds-content-card ' . ($content_type === 'quiz' ? 'quiz-card' : ($content_type === 'assignment' ? 'assignment-card' : 'reading-card'));
                     $badge_class = 'nds-content-type-badge ' . $content_type;
@@ -372,16 +426,37 @@ if (!defined('ABSPATH')) {
                             
                             <?php if ($content_type === 'quiz' && $attempts > 0) : ?>
                                 <div class="nds-content-meta-item">
-                                    🔄 Attempts: <strong><?php echo (int) $attempts; ?></strong>
+                                    🔄 Attempts: <strong><?php echo (int) $attempts_used; ?> / <?php echo (int) $attempts; ?></strong>
+                                </div>
+                            <?php endif; ?>
+
+                            <?php if ($content_type === 'quiz' && is_array($latest_attempt)) : ?>
+                                <?php
+                                $latest_score = isset($latest_attempt['score_percent']) && $latest_attempt['score_percent'] !== null ? (float) $latest_attempt['score_percent'] : null;
+                                $pass_threshold = isset($latest_attempt['pass_percentage']) && $latest_attempt['pass_percentage'] !== null
+                                    ? (float) $latest_attempt['pass_percentage']
+                                    : (isset($latest_attempt['min_grade_required']) && $latest_attempt['min_grade_required'] !== null ? (float) $latest_attempt['min_grade_required'] : 50.0);
+                                ?>
+                                <div class="nds-content-meta-item">
+                                    📊 Last result:
+                                    <?php if ($latest_score !== null) : ?>
+                                        <strong><?php echo esc_html(number_format($latest_score, 2)); ?>% (<?php echo $latest_score >= $pass_threshold ? 'Pass' : 'Fail'; ?>)</strong>
+                                    <?php else : ?>
+                                        <strong>Pending review</strong>
+                                    <?php endif; ?>
                                 </div>
                             <?php endif; ?>
                         </div>
                         
                         <div class="nds-content-footer">
                             <?php if ($content_type === 'quiz') : ?>
-                                <a href="<?php echo esc_url(home_url('/portal/quiz/' . (int)$content_id . '/')); ?>" class="nds-btn nds-btn-purple">
-                                    ✍️ Start Quiz
-                                </a>
+                                <?php if ($quiz_locked) : ?>
+                                    <span class="nds-btn nds-btn-secondary" style="cursor:not-allowed;opacity:.75;">🔒 Attempts Completed</span>
+                                <?php else : ?>
+                                    <a href="<?php echo esc_url(home_url('/portal/quiz/' . (int)$content_id . '/')); ?>" class="nds-btn nds-btn-purple">
+                                        ✍️ Start Quiz
+                                    </a>
+                                <?php endif; ?>
                             <?php elseif ($item['resource_url']) : ?>
                                 <a href="<?php echo esc_url($item['resource_url']); ?>" target="_blank" class="nds-btn nds-btn-green">
                                     🔗 Open Resource

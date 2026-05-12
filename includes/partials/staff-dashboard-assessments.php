@@ -113,7 +113,8 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_quiz_attempts_tabl
 
     $quiz_attempt_rows = $wpdb->get_results($wpdb->prepare(
         "SELECT qa.id, qa.attempt_no, qa.total_questions, qa.graded_questions, qa.correct_answers,
-                qa.score_percent, qa.submitted_at, qa.started_at, qa.ip_address,
+            qa.score_percent, qa.requires_manual_grading, qa.manual_feedback, qa.manually_graded_at,
+            qa.submitted_at, qa.started_at, qa.ip_address,
                 st.student_number, st.first_name, st.last_name,
                 lc.id AS content_id, lc.title AS quiz_title, lc.min_grade_required,
                 c.name AS course_name,
@@ -531,8 +532,10 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submiss
                             $threshold = isset($qa_row['min_grade_required']) && $qa_row['min_grade_required'] !== null
                                 ? max(0.0, min(100.0, (float) $qa_row['min_grade_required']))
                                 : 50.0;
-                            $has_auto_score = $score !== null && $graded_questions > 0;
+                            $has_auto_score = $score !== null;
                             $is_pass = $has_auto_score && $score >= $threshold;
+                            $requires_manual_grading = (int) ($qa_row['requires_manual_grading'] ?? 0) === 1;
+                            $manual_feedback = (string) ($qa_row['manual_feedback'] ?? '');
                             ?>
                             <tr>
                                 <td class="px-3 py-2">
@@ -560,6 +563,19 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submiss
                                         </span>
                                     <?php else : ?>
                                         <span class="text-[11px] font-semibold px-2 py-1 rounded bg-amber-100 text-amber-700">Pending</span>
+                                    <?php endif; ?>
+                                    <?php if (!empty($manual_feedback)) : ?>
+                                        <div class="mt-2 text-xs text-gray-600 whitespace-pre-wrap"><?php echo esc_html($manual_feedback); ?></div>
+                                    <?php endif; ?>
+                                    <?php if ($requires_manual_grading || !$has_auto_score) : ?>
+                                        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mt-2 space-y-2">
+                                            <?php wp_nonce_field('nds_staff_grade_quiz_attempt', 'nds_staff_grade_quiz_attempt_nonce'); ?>
+                                            <input type="hidden" name="action" value="nds_staff_grade_quiz_attempt">
+                                            <input type="hidden" name="quiz_attempt_id" value="<?php echo (int) ($qa_row['id'] ?? 0); ?>">
+                                            <input type="number" step="0.01" min="0" max="100" name="score_percent" value="<?php echo $has_auto_score ? esc_attr(number_format((float) $score, 2, '.', '')) : ''; ?>" placeholder="Score %" class="w-28 border border-gray-300 rounded px-2 py-1 text-xs">
+                                            <textarea name="manual_feedback" rows="2" class="w-full border border-gray-300 rounded px-2 py-1 text-xs" placeholder="Manual grading feedback (optional)"><?php echo esc_textarea($manual_feedback); ?></textarea>
+                                            <button type="submit" class="px-2 py-1 text-xs rounded bg-indigo-600 text-white hover:bg-indigo-700">Save Grade</button>
+                                        </form>
                                     <?php endif; ?>
                                 </td>
                                 <td class="px-3 py-2 text-xs text-gray-600">

@@ -369,12 +369,45 @@ if (empty($questions)) {
     echo '</div>'; wp_footer(); echo '</body></html>'; exit;
 }
 
-$shuffle            = !empty($quiz_content['shuffle_questions']);
-if ($shuffle) { shuffle($questions); }
+$prepared_questions = array();
+foreach ($questions as $source_idx => $question_row) {
+    if (!is_array($question_row)) {
+        continue;
+    }
+    $question_row['_source_index'] = (int) $source_idx;
+    $prepared_questions[] = $question_row;
+}
+
+$shuffle = !empty($quiz_content['shuffle_questions']);
+if ($shuffle) {
+    shuffle($prepared_questions);
+}
+
+$questions = array_values($prepared_questions);
+$question_order_indices = array_map(static function ($question_item) {
+    return isset($question_item['_source_index']) ? (int) $question_item['_source_index'] : 0;
+}, $questions);
+
 $time_limit_minutes = isset($quiz_content['time_limit_minutes']) ? (int) $quiz_content['time_limit_minutes'] : 0;
 $module_id          = (int) ($quiz_content['mid'] ?? 0);
 $module_detail_url  = $module_id > 0 ? home_url('/portal/module/' . $module_id . '/') : home_url('/portal/');
 $total_q            = count($questions);
+$attempts_allowed   = isset($quiz_content['attempts_allowed']) ? (int) $quiz_content['attempts_allowed'] : 1;
+$attempts_used      = 0;
+
+if (function_exists('nds_portal_ensure_quiz_attempts_table')) {
+    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+    $attempts_used = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$quiz_attempts_table} WHERE content_id = %d AND student_id = %d",
+        $content_id,
+        $student_id
+    ));
+}
+
+if ($attempts_allowed > 0 && $attempts_used >= $attempts_allowed) {
+    echo '<div class="nds-empty-state"><h2>No Attempts Remaining</h2><p>You have used all available attempts for this quiz.</p><p><a href="' . esc_url($module_detail_url) . '">Return to module</a></p></div>';
+    echo '</div>'; wp_footer(); echo '</body></html>'; exit;
+}
 ?>
 
 <div class="nds-quiz-page">
@@ -406,6 +439,9 @@ $total_q            = count($questions);
                 <span>&bull; <strong><?php echo (int) $quiz_content['attempts_allowed']; ?></strong>
                     attempt<?php echo (int) $quiz_content['attempts_allowed'] !== 1 ? 's' : ''; ?></span>
             <?php endif; ?>
+            <?php if ($attempts_allowed > 0) : ?>
+                <span>&bull; <strong><?php echo (int) $attempts_used; ?></strong> used</span>
+            <?php endif; ?>
         </div>
 
         <div class="nds-quiz-grid">
@@ -415,6 +451,7 @@ $total_q            = count($questions);
                     <?php wp_nonce_field('nds_portal_quiz_nonce', 'quiz_nonce'); ?>
                     <input type="hidden" name="action"            value="nds_portal_submit_quiz_attempt">
                     <input type="hidden" name="content_id"        value="<?php echo (int) $content_id; ?>">
+                    <input type="hidden" name="question_order"    value="<?php echo esc_attr(implode(',', $question_order_indices)); ?>">
                     <input type="hidden" name="flagged_questions" id="nds-flagged-questions" value="">
 
                     <?php foreach ($questions as $idx => $question) :
@@ -451,6 +488,14 @@ $total_q            = count($questions);
                                             <span class="nds-opt-text"><?php echo wp_kses_post($opt); ?></span>
                                         </label>
                                     <?php endforeach; ?>
+                                </div>
+                            <?php else : ?>
+                                <div class="nds-options">
+                                    <textarea
+                                        name="answers[<?php echo (int) $idx; ?>]"
+                                        rows="4"
+                                        class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                                        placeholder="Type your answer..."></textarea>
                                 </div>
                             <?php endif; ?>
 
@@ -566,6 +611,7 @@ $total_q            = count($questions);
             <?php wp_nonce_field('nds_portal_quiz_nonce', 'nonce'); ?>
             <input type="hidden" name="action"            value="nds_portal_submit_quiz_attempt">
             <input type="hidden" name="content_id"        value="<?php echo (int) $content_id; ?>">
+            <input type="hidden" name="question_order"    value="<?php echo esc_attr(implode(',', $question_order_indices)); ?>">
             <input type="hidden" name="flagged_questions" id="nds-submit-flagged" value="">
             <div id="nds-submit-answers"></div>
         </form>
@@ -628,9 +674,11 @@ const ndsQuiz = (function () {
         const btn = document.querySelector('.nds-nav-btn[data-question-index="' + idx + '"]');
         if (!btn) return;
         const checked = document.querySelector('input[name="answers[' + idx + ']"]:checked');
+        const textAnswer = document.querySelector('textarea[name="answers[' + idx + ']"]');
+        const hasTextAnswer = !!(textAnswer && textAnswer.value.trim() !== '');
         if (flagged.has(idx)) {
             btn.classList.remove('answered'); btn.classList.add('flagged');
-        } else if (checked) {
+        } else if (checked || hasTextAnswer) {
             btn.classList.remove('flagged'); btn.classList.add('answered');
         } else {
             btn.classList.remove('answered', 'flagged');
@@ -647,6 +695,8 @@ const ndsQuiz = (function () {
         let answered = 0;
         for (let i = 0; i < TOTAL; i++) {
             const checked = document.querySelector('input[name="answers[' + i + ']"]:checked');
+            const textAnswer = document.querySelector('textarea[name="answers[' + i + ']"]');
+            const typed = textAnswer ? textAnswer.value.trim() : '';
             const ansEl   = document.getElementById('nds-review-ans-' + i);
             const itemEl  = document.getElementById('nds-review-item-' + i);
             if (checked) {
@@ -654,6 +704,10 @@ const ndsQuiz = (function () {
                 const optEl = checked.closest('.nds-option')?.querySelector('.nds-opt-text');
                 const label = optEl ? checked.value + '. ' + esc(optEl.textContent.trim()) : checked.value;
                 if (ansEl)  ansEl.innerHTML  = '<span class="chosen">' + label + '</span>';
+                if (itemEl) { itemEl.classList.remove('unanswered'); itemEl.classList.add('answered'); }
+            } else if (typed !== '') {
+                answered++;
+                if (ansEl)  ansEl.innerHTML  = '<span class="chosen">' + esc(typed) + '</span>';
                 if (itemEl) { itemEl.classList.remove('unanswered'); itemEl.classList.add('answered'); }
             } else {
                 if (ansEl)  ansEl.innerHTML  = '<span class="none">Not answered</span>';
@@ -686,10 +740,11 @@ const ndsQuiz = (function () {
         container.innerHTML = '';
         for (let i = 0; i < TOTAL; i++) {
             const checked = document.querySelector('input[name="answers[' + i + ']"]:checked');
+            const textAnswer = document.querySelector('textarea[name="answers[' + i + ']"]');
             const inp = document.createElement('input');
             inp.type  = 'hidden';
             inp.name  = 'answers[' + i + ']';
-            inp.value = checked ? checked.value : '';
+            inp.value = checked ? checked.value : (textAnswer ? textAnswer.value.trim() : '');
             container.appendChild(inp);
         }
         const flagEl = document.getElementById('nds-submit-flagged');
@@ -718,6 +773,14 @@ const ndsQuiz = (function () {
             radio.addEventListener('change', function () {
                 const idx = parseInt(this.closest('.nds-question-item').dataset.questionIndex);
                 updateIndicator(idx);
+            });
+        });
+
+        document.querySelectorAll('textarea[name^="answers["]').forEach(function (textarea) {
+            textarea.addEventListener('input', function () {
+                const idxMatch = this.name.match(/answers\[(\d+)\]/);
+                if (!idxMatch) return;
+                updateIndicator(parseInt(idxMatch[1], 10));
             });
         });
 

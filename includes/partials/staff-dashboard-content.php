@@ -267,6 +267,12 @@ $type_labels = array(
                                     </label>
                                 </div>
                             </div>
+                            <div class="mt-3">
+                                <label class="inline-flex items-center text-sm text-gray-700">
+                                    <input type="checkbox" name="allow_review_after_submit" value="1" <?php checked((int) ($edit_item['allow_review_after_submit'] ?? 1), 1); ?> class="mr-2">
+                                    Allow students to review answers after submission
+                                </label>
+                            </div>
                         </div>
                     </div>
 
