@@ -45,6 +45,10 @@ if ($graded > 0) {
     <?php endif; ?>
 
     <div class="bg-white border border-gray-200 rounded-lg p-4">
+        <div class="mb-4">
+            <h2 class="text-xl font-semibold text-gray-900">Gradebook</h2>
+            <p class="text-sm text-gray-600 mt-1">Manage final percentages and grades for the active academic term.</p>
+        </div>
         <div class="flex flex-wrap items-end justify-between gap-3">
             <div>
                 <h3 class="text-lg font-semibold text-gray-900">Gradebook Management</h3>
@@ -73,7 +77,7 @@ if ($graded > 0) {
 
     <div class="bg-white border border-gray-200 rounded-lg p-4">
         <label class="block text-sm font-medium text-gray-700 mb-2">Course</label>
-        <select onchange="window.location.href='<?php echo esc_url(nds_staff_portal_tab_url('gradebook')); ?>&course_id=' + this.value" class="w-full md:w-96 border border-gray-300 rounded-lg px-3 py-2">
+        <select onchange="window.location.href='<?php echo esc_url(nds_staff_tab_url('gradebook')); ?>&course_id=' + this.value" class="w-full md:w-96 border border-gray-300 rounded-lg px-3 py-2">
             <?php foreach ($courses_taught as $course): ?>
                 <option value="<?php echo esc_attr($course['id']); ?>" <?php selected($selected_course_id, (int) $course['id']); ?>><?php echo esc_html($course['name']); ?></option>
             <?php endforeach; ?>
@@ -84,7 +88,7 @@ if ($graded > 0) {
         <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="bg-white border border-gray-200 rounded-lg overflow-x-auto">
             <?php wp_nonce_field('nds_staff_save_gradebook', 'nds_staff_save_gradebook_nonce'); ?>
             <input type="hidden" name="action" value="nds_staff_save_gradebook">
-            <input type="hidden" name="redirect_url" value="<?php echo esc_url(nds_staff_portal_tab_url('gradebook') . '&course_id=' . (int) $selected_course_id); ?>">
+            <input type="hidden" name="redirect_url" value="<?php echo esc_url(add_query_arg('course_id', (int) $selected_course_id, nds_staff_tab_url('gradebook'))); ?>">
             <input type="hidden" name="course_id" value="<?php echo esc_attr($selected_course_id); ?>">
 
             <table class="min-w-full divide-y divide-gray-200 text-sm">

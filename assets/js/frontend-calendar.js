@@ -2,8 +2,11 @@
   'use strict';
   $(document).ready(function(){
     var el = document.getElementById('nds-frontend-calendar');
-    if (!el || typeof window.FullCalendar === 'undefined') {
-      console.error('FullCalendar not loaded or calendar element not found');
+    if (!el) {
+      return;
+    }
+    if (typeof window.FullCalendar === 'undefined') {
+      console.warn('FullCalendar is not available for frontend calendar');
       return;
     }
 

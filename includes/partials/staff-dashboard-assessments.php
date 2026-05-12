@@ -209,9 +209,32 @@ if (!empty($course_ids) && function_exists('nds_portal_ensure_assignment_submiss
         ), ARRAY_A);
     }
 }
+
+$assessment_count = count($assessments);
+$submission_count = count($submissions);
+$question_count = count($question_bank_items);
 ?>
 
 <div class="space-y-6">
+    <div class="bg-white rounded-xl border border-gray-200 p-5">
+        <h2 class="text-xl font-semibold text-gray-900">Assessment Hub</h2>
+        <p class="text-sm text-gray-600 mt-1">Create assessments, manage question banks, and review learner submissions.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500">Assessments</p>
+                <p class="text-2xl font-semibold text-gray-900 mt-1"><?php echo esc_html($assessment_count); ?></p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500">Selected Submissions</p>
+                <p class="text-2xl font-semibold text-gray-900 mt-1"><?php echo esc_html($submission_count); ?></p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500">Question Bank Items</p>
+                <p class="text-2xl font-semibold text-gray-900 mt-1"><?php echo esc_html($question_count); ?></p>
+            </div>
+        </div>
+    </div>
+
     <?php if (isset($_GET['assessment_notice'])): ?>
         <div class="p-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm">
             Assessment update successful.

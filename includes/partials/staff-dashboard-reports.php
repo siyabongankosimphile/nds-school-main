@@ -69,6 +69,11 @@ $submission_completion_rate = $total_submissions > 0 ? round(($graded_submission
 ?>
 
 <div class="space-y-6">
+    <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="text-xl font-semibold text-gray-900">Performance Reports</h2>
+        <p class="text-sm text-gray-600 mt-1">Monitor learner outcomes, grading completion, and identify learners needing support.</p>
+    </div>
+
     <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div class="bg-white border border-gray-200 rounded-lg p-4">
             <p class="text-xs text-gray-500 uppercase">Active Learners</p>

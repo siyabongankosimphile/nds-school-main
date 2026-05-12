@@ -15,23 +15,22 @@
     
     // Get AJAX config - try admin, staff, and frontend localized objects
     var ajaxConfig = window.ndsCalendar || window.ndsStaffCalendar || window.ndsFrontendCalendar;
-    if (!ajaxConfig) {
-      console.error('Calendar AJAX configuration not found');
-      return;
-    }
     
     // Determine action name based on context
     var ajaxAction = isAdmin ? 'nds_admin_calendar_events' : (isStaff ? 'nds_staff_calendar_events' : 'nds_public_calendar_events');
     
-    console.log(isAdmin ? 'Admin calendar script loaded' : (isStaff ? 'Staff calendar script loaded' : 'Frontend calendar script loaded'));
     var el = document.getElementById(calendarId);
-    console.log('Calendar element found:', !!el);
-    if (!el || typeof window.FullCalendar === 'undefined') {
-      console.error('FullCalendar not loaded or calendar element not found');
+    if (!el) {
       return;
     }
-
-    console.log('Initializing calendar...');
+    if (!ajaxConfig) {
+      console.warn('Calendar AJAX configuration not found');
+      return;
+    }
+    if (typeof window.FullCalendar === 'undefined') {
+      console.warn('FullCalendar is not available for calendar rendering');
+      return;
+    }
     var calendarConfig = {
       initialView: 'dayGridMonth',
       initialDate: new Date(), // Set to today
