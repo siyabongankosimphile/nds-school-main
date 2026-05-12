@@ -53,6 +53,55 @@ if (!empty($assigned_module_ids)) {
 }
 
 $courses_for_form = isset($courses_taught) && is_array($courses_taught) ? $courses_taught : array();
+$course_cohorts_map = array();
+if (!empty($courses_for_form)) {
+    $course_program_map = array();
+    foreach ($courses_for_form as $course_opt) {
+        $cid = isset($course_opt['id']) ? (int) $course_opt['id'] : 0;
+        $pid = isset($course_opt['program_id']) ? (int) $course_opt['program_id'] : 0;
+        if ($cid > 0 && $pid > 0) {
+            $course_program_map[$cid] = $pid;
+        }
+    }
+
+    if (!empty($course_program_map)) {
+        $program_ids = array_values(array_unique(array_filter(array_map('intval', array_values($course_program_map)))));
+        if (!empty($program_ids)) {
+            $program_placeholders = implode(',', array_fill(0, count($program_ids), '%d'));
+            $cohort_rows = $wpdb->get_results($wpdb->prepare(
+                "SELECT id, program_id, code, name, status
+                 FROM {$wpdb->prefix}nds_cohorts
+                 WHERE program_id IN ({$program_placeholders})
+                 ORDER BY status = 'active' DESC, name ASC",
+                $program_ids
+            ), ARRAY_A);
+
+            $cohorts_by_program = array();
+            foreach ($cohort_rows as $cohort_row) {
+                $pid = (int) ($cohort_row['program_id'] ?? 0);
+                if ($pid <= 0) {
+                    continue;
+                }
+                if (!isset($cohorts_by_program[$pid])) {
+                    $cohorts_by_program[$pid] = array();
+                }
+                $cohorts_by_program[$pid][] = $cohort_row;
+            }
+
+            foreach ($course_program_map as $cid => $pid) {
+                $course_cohorts_map[(int) $cid] = isset($cohorts_by_program[$pid]) ? $cohorts_by_program[$pid] : array();
+            }
+        }
+    }
+}
+
+$selected_content_access_grouping = 'all';
+$default_export_course_id = 0;
+if (!empty($edit_item['course_id'])) {
+    $default_export_course_id = (int) $edit_item['course_id'];
+} elseif (!empty($courses_for_form[0]['id'])) {
+    $default_export_course_id = (int) $courses_for_form[0]['id'];
+}
 
 $items = $wpdb->get_results(
     $wpdb->prepare(
@@ -78,12 +127,23 @@ if ($edit_content_id > 0) {
     ), ARRAY_A);
 }
 
+if (!empty($edit_item['access_grouping'])) {
+    $selected_content_access_grouping = sanitize_key((string) $edit_item['access_grouping']);
+}
+if (!in_array($selected_content_access_grouping, array('all', 'cohorts'), true)) {
+    $selected_content_access_grouping = 'all';
+}
+
 $type_labels = array(
     'study_material' => 'Study Material',
     'assignment' => 'Assignment',
     'quiz' => 'Quiz',
     'online_course' => 'Online Course',
     'announcement' => 'Announcement',
+    'discussion_forum' => 'Discussion Forum',
+    'attendance' => 'Attendance',
+    'survey' => 'Survey',
+    'workshop' => 'Workshop',
 );
 ?>
 
@@ -100,6 +160,14 @@ $type_labels = array(
         <div class="p-4 rounded-lg border border-green-200 bg-green-50 text-green-800 text-sm">
             Content deleted successfully.
         </div>
+    <?php elseif ($notice === 'imported') : ?>
+        <div class="p-4 rounded-lg border border-green-200 bg-green-50 text-green-800 text-sm">
+            Course content imported successfully. Imported items are hidden by default so you can review and publish safely.
+        </div>
+    <?php elseif ($notice === 'restored') : ?>
+        <div class="p-4 rounded-lg border border-green-200 bg-green-50 text-green-800 text-sm">
+            Backup restored successfully. Restored content is hidden by default so you can review before publishing.
+        </div>
     <?php endif; ?>
 
     <?php if (!empty($error)) : ?>
@@ -109,6 +177,9 @@ $type_labels = array(
                 'permission' => 'You do not have permission to publish content for this module.',
                 'missing_fields' => 'Please complete all required fields.',
                 'invalid_module' => 'Please select a valid module.',
+                'invalid_import' => 'Source and target courses must be different for import.',
+                'invalid_restore' => 'The uploaded backup is invalid or unsupported.',
+                'invalid_restore_mapping' => 'Backup restore failed due to invalid section-to-content mapping.',
                 'upload_failed' => 'File upload failed. Please try again.',
                 'save_failed' => 'Could not save content. Please try again.',
                 'security' => 'Security validation failed. Please reload and try again.',
@@ -172,6 +243,10 @@ $type_labels = array(
                             <option value="study_material" <?php selected(($edit_item['content_type'] ?? 'study_material'), 'study_material'); ?>>Study Material</option>
                             <option value="assignment" <?php selected(($edit_item['content_type'] ?? ''), 'assignment'); ?>>Assignment</option>
                             <option value="quiz" <?php selected(($edit_item['content_type'] ?? ''), 'quiz'); ?>>Quiz</option>
+                            <option value="discussion_forum" <?php selected(($edit_item['content_type'] ?? ''), 'discussion_forum'); ?>>Discussion Forum</option>
+                            <option value="attendance" <?php selected(($edit_item['content_type'] ?? ''), 'attendance'); ?>>Attendance</option>
+                            <option value="survey" <?php selected(($edit_item['content_type'] ?? ''), 'survey'); ?>>Survey</option>
+                            <option value="workshop" <?php selected(($edit_item['content_type'] ?? ''), 'workshop'); ?>>Workshop</option>
                             <option value="online_course" <?php selected(($edit_item['content_type'] ?? ''), 'online_course'); ?>>Online Course</option>
                             <option value="announcement" <?php selected(($edit_item['content_type'] ?? ''), 'announcement'); ?>>Announcement</option>
                         </select>
@@ -180,6 +255,32 @@ $type_labels = array(
                     <div id="due-date-wrap" class="hidden">
                         <label class="block text-sm font-medium text-gray-700 mb-1">Assignment Due Date *</label>
                         <input id="due_date" type="date" name="due_date" value="<?php echo !empty($edit_item['due_date']) ? esc_attr(date('Y-m-d', strtotime($edit_item['due_date']))) : ''; ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                    </div>
+
+                    <div id="nds-quiz-settings" class="md:col-span-2 hidden">
+                        <div class="border border-indigo-200 rounded-lg bg-indigo-50 p-4">
+                            <h4 class="text-sm font-semibold text-indigo-900 mb-3">Quiz Settings</h4>
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-3">
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Time Limit (minutes)</label>
+                                    <input type="number" min="0" name="time_limit_minutes" value="<?php echo isset($edit_item['time_limit_minutes']) && $edit_item['time_limit_minutes'] !== null ? esc_attr((int) $edit_item['time_limit_minutes']) : ''; ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0 = no limit">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Attempts Allowed</label>
+                                    <input type="number" min="0" name="attempts_allowed" value="<?php echo isset($edit_item['attempts_allowed']) && $edit_item['attempts_allowed'] !== null ? esc_attr((int) $edit_item['attempts_allowed']) : '1'; ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="0 = unlimited">
+                                </div>
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-700 mb-1">Pass Percentage</label>
+                                    <input type="number" step="0.01" min="0" max="100" name="pass_percentage" value="<?php echo isset($edit_item['pass_percentage']) && $edit_item['pass_percentage'] !== null ? esc_attr((float) $edit_item['pass_percentage']) : ''; ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg" placeholder="e.g. 50">
+                                </div>
+                                <div class="flex items-end">
+                                    <label class="inline-flex items-center text-sm text-gray-700 mb-2">
+                                        <input type="checkbox" name="shuffle_questions" value="1" <?php checked((int) ($edit_item['shuffle_questions'] ?? 0), 1); ?> class="mr-2">
+                                        Shuffle questions per learner
+                                    </label>
+                                </div>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="md:col-span-2">
@@ -251,6 +352,47 @@ $type_labels = array(
                         <input type="number" step="0.01" min="0" max="100" name="min_grade_required" value="<?php echo isset($edit_item['min_grade_required']) ? esc_attr($edit_item['min_grade_required']) : ''; ?>" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
                     </div>
 
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Group Access</label>
+                        <select name="access_grouping" id="nds-content-access-grouping" class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                            <option value="all" <?php selected($selected_content_access_grouping, 'all'); ?>>All enrolled learners</option>
+                            <option value="cohorts" <?php selected($selected_content_access_grouping, 'cohorts'); ?>>Specific cohorts only</option>
+                        </select>
+                    </div>
+
+                    <div id="nds-content-cohorts-wrap" class="md:col-span-2 <?php echo $selected_content_access_grouping === 'cohorts' ? '' : 'hidden'; ?>">
+                        <label class="block text-sm font-medium text-gray-700 mb-1">Allowed Cohorts</label>
+                        <input type="hidden" name="allowed_cohort_ids" id="nds-content-allowed-cohort-ids" value="<?php echo esc_attr((string) ($edit_item['allowed_cohort_ids'] ?? '')); ?>">
+
+                        <div class="flex items-center gap-2">
+                            <button type="button" id="nds-open-cohort-picker" class="px-3 py-2 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50">Choose cohorts</button>
+                            <button type="button" id="nds-clear-cohort-picker" class="px-3 py-2 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50">Clear</button>
+                        </div>
+                        <p class="mt-1 text-xs text-gray-500">Selections are saved as cohort IDs for this content item.</p>
+                        <div id="nds-content-cohort-pills" class="mt-2 flex flex-wrap gap-2"></div>
+
+                        <div id="nds-cohort-picker-modal" class="fixed inset-0 bg-black/40 z-40 hidden items-center justify-center p-4">
+                            <div class="bg-white rounded-xl shadow-xl border border-gray-200 w-full max-w-2xl max-h-[80vh] overflow-hidden">
+                                <div class="px-4 py-3 border-b border-gray-200 flex items-center justify-between">
+                                    <h4 class="text-sm font-semibold text-gray-900">Select Cohorts</h4>
+                                    <button type="button" id="nds-close-cohort-picker" class="text-gray-500 hover:text-gray-700">Close</button>
+                                </div>
+                                <div class="p-4 border-b border-gray-200">
+                                    <input type="text" id="nds-cohort-search" class="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm" placeholder="Search by cohort name, code, or #ID">
+                                    <div class="mt-2 flex items-center gap-2">
+                                        <button type="button" id="nds-cohort-select-all" class="px-2 py-1 text-xs rounded border border-gray-300 bg-white hover:bg-gray-50">Select All Listed</button>
+                                        <button type="button" id="nds-cohort-unselect-all" class="px-2 py-1 text-xs rounded border border-gray-300 bg-white hover:bg-gray-50">Unselect All Listed</button>
+                                    </div>
+                                </div>
+                                <div id="nds-cohort-list" class="p-4 overflow-auto max-h-[50vh]"></div>
+                                <div class="px-4 py-3 border-t border-gray-200 flex items-center justify-end gap-2">
+                                    <button type="button" id="nds-cohort-cancel" class="px-3 py-2 text-sm rounded border border-gray-300 bg-white hover:bg-gray-50">Cancel</button>
+                                    <button type="button" id="nds-cohort-apply" class="px-3 py-2 text-sm rounded bg-blue-600 text-white hover:bg-blue-700">Apply Selection</button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="md:col-span-2 flex items-center justify-between">
                         <div class="flex items-center gap-4">
                             <label class="inline-flex items-center text-sm text-gray-700">
@@ -281,6 +423,64 @@ $type_labels = array(
     </div>
 
     <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+        <div class="p-6 border-b border-gray-200">
+            <h3 class="text-xl font-semibold text-gray-900 flex items-center">
+                <i class="fas fa-copy text-indigo-600 mr-2"></i>Reuse Content From Another Course
+            </h3>
+            <p class="text-sm text-gray-600 mt-1">Import materials and activities from one of your other courses. Imported items are hidden for review.</p>
+            <div class="mt-3">
+                <a id="nds-export-course-content" href="<?php echo esc_url(admin_url('admin-post.php?action=nds_staff_export_course_content&course_id=' . $default_export_course_id)); ?>" class="inline-flex items-center px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 text-sm">
+                    <i class="fas fa-file-export mr-2"></i>Download Course Backup (JSON)
+                </a>
+            </div>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" class="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3">
+                <?php wp_nonce_field('nds_staff_import_course_content', 'nds_staff_import_course_content_nonce'); ?>
+                <input type="hidden" name="action" value="nds_staff_import_course_content">
+                <input type="hidden" name="target_course_id" id="nds-import-target-course" value="<?php echo esc_attr((int) ($edit_item['course_id'] ?? 0)); ?>">
+
+                <div class="md:col-span-2">
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Source Course</label>
+                    <select name="source_course_id" required class="w-full px-3 py-2 border border-gray-300 rounded-lg">
+                        <option value="">Select source course</option>
+                        <?php foreach ($courses_for_form as $course_opt) : ?>
+                            <option value="<?php echo esc_attr($course_opt['id']); ?>"><?php echo esc_html($course_opt['name'] . (!empty($course_opt['code']) ? ' (' . $course_opt['code'] . ')' : '')); ?></option>
+                        <?php endforeach; ?>
+                    </select>
+                </div>
+
+                <div class="md:col-span-2">
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Content Types</label>
+                    <div class="grid grid-cols-2 gap-2 text-xs text-gray-700 border border-gray-200 rounded-lg p-2 bg-gray-50">
+                        <label class="inline-flex items-center"><input type="checkbox" name="import_types[]" value="study_material" checked class="mr-1">Study Material</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="import_types[]" value="assignment" checked class="mr-1">Assignment</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="import_types[]" value="quiz" checked class="mr-1">Quiz</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="import_types[]" value="discussion_forum" checked class="mr-1">Forum</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="import_types[]" value="attendance" checked class="mr-1">Attendance</label>
+                        <label class="inline-flex items-center"><input type="checkbox" name="import_types[]" value="survey" checked class="mr-1">Survey</label>
+                    </div>
+                </div>
+
+                <div class="flex items-end">
+                    <button type="submit" class="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700" onclick="return confirm('Import selected content into the currently selected course?');">Import Content</button>
+                </div>
+            </form>
+
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data" class="mt-4 grid grid-cols-1 md:grid-cols-5 gap-3 border-t border-gray-200 pt-4">
+                <?php wp_nonce_field('nds_staff_restore_course_content', 'nds_staff_restore_course_content_nonce'); ?>
+                <input type="hidden" name="action" value="nds_staff_restore_course_content">
+                <input type="hidden" name="target_course_id" id="nds-restore-target-course" value="<?php echo esc_attr((int) ($edit_item['course_id'] ?? 0)); ?>">
+
+                <div class="md:col-span-3">
+                    <label class="block text-xs font-medium text-gray-700 mb-1">Restore Backup File (JSON)</label>
+                    <input type="file" name="backup_file" accept="application/json,.json" required class="w-full px-3 py-2 border border-gray-300 rounded-lg bg-white">
+                </div>
+
+                <div class="md:col-span-2 flex items-end">
+                    <button type="submit" class="w-full px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700" onclick="return confirm('Restore this backup into the currently selected course? Existing content will be kept; restored items are added as new records.');">Restore Backup</button>
+                </div>
+            </form>
+        </div>
+
         <div class="p-6 border-b border-gray-200">
             <h3 class="text-xl font-semibold text-gray-900 flex items-center">
                 <i class="fas fa-list text-green-600 mr-2"></i>Published Items
@@ -374,6 +574,7 @@ $type_labels = array(
 function ndsToggleDueDateField(contentType) {
     const wrap = document.getElementById('due-date-wrap');
     const input = document.getElementById('due_date');
+    const quizSettings = document.getElementById('nds-quiz-settings');
     if (!wrap || !input) return;
 
     if (contentType === 'assignment') {
@@ -383,6 +584,14 @@ function ndsToggleDueDateField(contentType) {
         wrap.classList.add('hidden');
         input.required = false;
         input.value = '';
+    }
+
+    if (quizSettings) {
+        if (contentType === 'quiz') {
+            quizSettings.classList.remove('hidden');
+        } else {
+            quizSettings.classList.add('hidden');
+        }
     }
 }
 
@@ -398,6 +607,267 @@ document.addEventListener('DOMContentLoaded', function() {
 
     const courseSelect = document.getElementById('nds-content-course');
     const moduleSelect = document.getElementById('nds-content-module');
+    const accessGroupingSelect = document.getElementById('nds-content-access-grouping');
+    const allowedCohortsInput = document.getElementById('nds-content-allowed-cohort-ids');
+    const cohortsWrap = document.getElementById('nds-content-cohorts-wrap');
+    const cohortPills = document.getElementById('nds-content-cohort-pills');
+    const cohortModal = document.getElementById('nds-cohort-picker-modal');
+    const cohortList = document.getElementById('nds-cohort-list');
+    const cohortSearch = document.getElementById('nds-cohort-search');
+    const openCohortPickerBtn = document.getElementById('nds-open-cohort-picker');
+    const closeCohortPickerBtn = document.getElementById('nds-close-cohort-picker');
+    const cancelCohortPickerBtn = document.getElementById('nds-cohort-cancel');
+    const applyCohortPickerBtn = document.getElementById('nds-cohort-apply');
+    const clearCohortPickerBtn = document.getElementById('nds-clear-cohort-picker');
+    const selectAllCohortsBtn = document.getElementById('nds-cohort-select-all');
+    const unselectAllCohortsBtn = document.getElementById('nds-cohort-unselect-all');
+    const courseCohortsMap = <?php echo wp_json_encode($course_cohorts_map); ?>;
+
+    let cohortDraftSelection = [];
+
+    function parseSelectedCohorts() {
+        if (!allowedCohortsInput) {
+            return [];
+        }
+        return String(allowedCohortsInput.value || '').split(',').map(function (v) {
+            return parseInt(String(v).trim(), 10);
+        }).filter(function (v) {
+            return !Number.isNaN(v) && v > 0;
+        });
+    }
+
+    function writeSelectedCohorts(ids) {
+        if (!allowedCohortsInput) {
+            return;
+        }
+        const uniqueIds = Array.from(new Set(ids)).filter(function (v) {
+            return Number.isInteger(v) && v > 0;
+        });
+        allowedCohortsInput.value = uniqueIds.join(',');
+    }
+
+    function renderCohortPills() {
+        if (!cohortPills || !courseSelect || !allowedCohortsInput) {
+            return;
+        }
+        cohortPills.innerHTML = '';
+        const courseId = courseSelect.value || '0';
+        const cohorts = Array.isArray(courseCohortsMap[courseId]) ? courseCohortsMap[courseId] : [];
+        const selectedIds = parseSelectedCohorts();
+
+        if (!selectedIds.length) {
+            const empty = document.createElement('span');
+            empty.className = 'text-xs text-gray-400';
+            empty.textContent = 'No cohorts selected.';
+            cohortPills.appendChild(empty);
+            return;
+        }
+
+        const cohortIndex = {};
+        cohorts.forEach(function (cohort) {
+            const id = parseInt(cohort.id || 0, 10);
+            if (id > 0) {
+                cohortIndex[id] = cohort;
+            }
+        });
+
+        selectedIds.forEach(function (id) {
+            const cohort = cohortIndex[id] || null;
+            const chip = document.createElement('button');
+            chip.type = 'button';
+            chip.className = 'px-2 py-1 text-xs rounded-full border border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100';
+            chip.textContent = cohort
+                ? '#' + id + ' ' + String(cohort.name || cohort.code || 'Cohort') + ' ×'
+                : '#' + id + ' ×';
+            chip.addEventListener('click', function () {
+                const filtered = parseSelectedCohorts().filter(function (itemId) {
+                    return itemId !== id;
+                });
+                writeSelectedCohorts(filtered);
+                renderCohortPills();
+            });
+            cohortPills.appendChild(chip);
+        });
+    }
+
+    function getVisibleCohortRows() {
+        if (!courseSelect) {
+            return [];
+        }
+        const courseId = courseSelect.value || '0';
+        const cohorts = Array.isArray(courseCohortsMap[courseId]) ? courseCohortsMap[courseId] : [];
+        const searchTerm = cohortSearch ? String(cohortSearch.value || '').toLowerCase() : '';
+        if (!searchTerm) {
+            return cohorts;
+        }
+        return cohorts.filter(function (cohort) {
+            const idText = '#' + String(cohort.id || '');
+            const haystack = (idText + ' ' + String(cohort.name || '') + ' ' + String(cohort.code || '')).toLowerCase();
+            return haystack.indexOf(searchTerm) !== -1;
+        });
+    }
+
+    function renderCohortModalList() {
+        if (!cohortList) {
+            return;
+        }
+        const rows = getVisibleCohortRows();
+        cohortList.innerHTML = '';
+
+        if (!rows.length) {
+            const empty = document.createElement('p');
+            empty.className = 'text-sm text-gray-500';
+            empty.textContent = 'No cohorts match your search for this course.';
+            cohortList.appendChild(empty);
+            return;
+        }
+
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-1 md:grid-cols-2 gap-2';
+
+        rows.forEach(function (cohort) {
+            const id = parseInt(cohort.id || 0, 10);
+            if (!id) {
+                return;
+            }
+            const row = document.createElement('label');
+            row.className = 'flex items-center gap-2 border border-gray-200 rounded-lg px-3 py-2 bg-white hover:bg-gray-50';
+            const checked = cohortDraftSelection.indexOf(id) !== -1;
+            row.innerHTML = ''
+                + '<input type="checkbox" class="nds-cohort-pick" value="' + id + '"' + (checked ? ' checked' : '') + '>'
+                + '<span class="text-sm text-gray-700">#' + id + ' ' + String(cohort.name || cohort.code || 'Cohort') + '</span>'
+                + '<span class="ml-auto text-[11px] px-2 py-0.5 rounded ' + (String(cohort.status || '') === 'active' ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600') + '">' + String(cohort.status || 'unknown') + '</span>';
+            grid.appendChild(row);
+        });
+
+        cohortList.appendChild(grid);
+        cohortList.querySelectorAll('.nds-cohort-pick').forEach(function (checkbox) {
+            checkbox.addEventListener('change', function () {
+                const id = parseInt(checkbox.value || '0', 10);
+                if (!id) {
+                    return;
+                }
+                if (checkbox.checked) {
+                    if (cohortDraftSelection.indexOf(id) === -1) {
+                        cohortDraftSelection.push(id);
+                    }
+                } else {
+                    cohortDraftSelection = cohortDraftSelection.filter(function (itemId) {
+                        return itemId !== id;
+                    });
+                }
+            });
+        });
+    }
+
+    function openCohortModal() {
+        if (!cohortModal) {
+            return;
+        }
+        cohortDraftSelection = parseSelectedCohorts();
+        if (cohortSearch) {
+            cohortSearch.value = '';
+        }
+        renderCohortModalList();
+        cohortModal.classList.remove('hidden');
+        cohortModal.classList.add('flex');
+    }
+
+    function closeCohortModal() {
+        if (!cohortModal) {
+            return;
+        }
+        cohortModal.classList.add('hidden');
+        cohortModal.classList.remove('flex');
+    }
+
+    function selectOrUnselectVisibleRows(checked) {
+        const rows = getVisibleCohortRows();
+        const ids = rows.map(function (cohort) {
+            return parseInt(cohort.id || 0, 10);
+        }).filter(function (id) {
+            return id > 0;
+        });
+
+        if (checked) {
+            ids.forEach(function (id) {
+                if (cohortDraftSelection.indexOf(id) === -1) {
+                    cohortDraftSelection.push(id);
+                }
+            });
+        } else {
+            cohortDraftSelection = cohortDraftSelection.filter(function (id) {
+                return ids.indexOf(id) === -1;
+            });
+        }
+
+        renderCohortModalList();
+    }
+
+    if (openCohortPickerBtn) {
+        openCohortPickerBtn.addEventListener('click', openCohortModal);
+    }
+    if (closeCohortPickerBtn) {
+        closeCohortPickerBtn.addEventListener('click', closeCohortModal);
+    }
+    if (cancelCohortPickerBtn) {
+        cancelCohortPickerBtn.addEventListener('click', closeCohortModal);
+    }
+    if (applyCohortPickerBtn) {
+        applyCohortPickerBtn.addEventListener('click', function () {
+            writeSelectedCohorts(cohortDraftSelection);
+            renderCohortPills();
+            closeCohortModal();
+        });
+    }
+    if (clearCohortPickerBtn) {
+        clearCohortPickerBtn.addEventListener('click', function () {
+            writeSelectedCohorts([]);
+            renderCohortPills();
+        });
+    }
+    if (cohortSearch) {
+        cohortSearch.addEventListener('input', renderCohortModalList);
+    }
+    if (selectAllCohortsBtn) {
+        selectAllCohortsBtn.addEventListener('click', function () {
+            selectOrUnselectVisibleRows(true);
+        });
+    }
+    if (unselectAllCohortsBtn) {
+        unselectAllCohortsBtn.addEventListener('click', function () {
+            selectOrUnselectVisibleRows(false);
+        });
+    }
+
+    if (cohortModal) {
+        cohortModal.addEventListener('click', function (event) {
+            if (event.target === cohortModal) {
+                closeCohortModal();
+            }
+        });
+    }
+
+    document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && cohortModal && !cohortModal.classList.contains('hidden')) {
+            closeCohortModal();
+        }
+    });
+
+    if (allowedCohortsInput) {
+        allowedCohortsInput.addEventListener('change', renderCohortPills);
+    }
+
+    function syncAccessGroupingUI() {
+        if (!accessGroupingSelect || !cohortsWrap) {
+            return;
+        }
+        if (accessGroupingSelect.value === 'cohorts') {
+            cohortsWrap.classList.remove('hidden');
+        } else {
+            cohortsWrap.classList.add('hidden');
+        }
+    }
 
     function syncContentModules() {
         if (!courseSelect || !moduleSelect) {
@@ -432,7 +902,37 @@ document.addEventListener('DOMContentLoaded', function() {
     if (courseSelect && moduleSelect) {
         courseSelect.addEventListener('change', syncContentModules);
         syncContentModules();
+        renderCohortPills();
+
+        const importTarget = document.getElementById('nds-import-target-course');
+        const restoreTarget = document.getElementById('nds-restore-target-course');
+        const exportLink = document.getElementById('nds-export-course-content');
+        const exportBaseUrl = <?php echo wp_json_encode(admin_url('admin-post.php?action=nds_staff_export_course_content&course_id=')); ?>;
+        if (importTarget) {
+            importTarget.value = courseSelect.value || '';
+            courseSelect.addEventListener('change', function () {
+                importTarget.value = courseSelect.value || '';
+                if (restoreTarget) {
+                    restoreTarget.value = courseSelect.value || '';
+                }
+                if (exportLink) {
+                    exportLink.href = exportBaseUrl + encodeURIComponent(courseSelect.value || '0');
+                }
+                renderCohortPills();
+            });
+        }
+
+        if (exportLink) {
+            exportLink.href = exportBaseUrl + encodeURIComponent(courseSelect.value || '0');
+        }
     }
+
+    if (accessGroupingSelect) {
+        accessGroupingSelect.addEventListener('change', syncAccessGroupingUI);
+        syncAccessGroupingUI();
+    }
+
+    renderCohortPills();
 });
 
 // ---------- Quiz Builder ----------

@@ -202,6 +202,26 @@ function nds_staff_normalize_access_window($start_raw, $end_raw) {
     return array($access_start, $access_end);
 }
 
+function nds_staff_normalize_cohort_ids_csv($raw_value) {
+    if (is_array($raw_value)) {
+        $ids = array_map('intval', $raw_value);
+    } else {
+        $raw = sanitize_text_field((string) wp_unslash($raw_value));
+        $ids = array_map('intval', preg_split('/[^0-9]+/', $raw));
+    }
+
+    $ids = array_values(array_unique(array_filter($ids, static function ($id) {
+        return $id > 0;
+    })));
+
+    return implode(',', $ids);
+}
+
+function nds_staff_normalize_access_grouping($raw_value) {
+    $value = sanitize_key((string) wp_unslash($raw_value));
+    return in_array($value, array('all', 'cohorts'), true) ? $value : 'all';
+}
+
 function nds_staff_ensure_portal_tables() {
     global $wpdb;
     $charset_collate = $wpdb->get_charset_collate();
@@ -218,6 +238,10 @@ function nds_staff_ensure_portal_tables() {
         title VARCHAR(255) NOT NULL,
         description TEXT NULL,
         quiz_data LONGTEXT NULL,
+        time_limit_minutes INT NULL,
+        attempts_allowed INT DEFAULT 1,
+        shuffle_questions TINYINT(1) DEFAULT 0,
+        pass_percentage DECIMAL(5,2) NULL,
         resource_url VARCHAR(500) NULL,
         attachment_url VARCHAR(500) NULL,
         due_date DATE NULL,
@@ -226,6 +250,8 @@ function nds_staff_ensure_portal_tables() {
         access_end DATETIME NULL,
         completion_required TINYINT(1) DEFAULT 0,
         min_grade_required DECIMAL(5,2) NULL,
+        access_grouping VARCHAR(20) DEFAULT 'all',
+        allowed_cohort_ids TEXT NULL,
         sort_order INT DEFAULT 0,
         status VARCHAR(20) DEFAULT 'published',
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -244,6 +270,10 @@ function nds_staff_ensure_portal_tables() {
         'module_id'           => "ALTER TABLE {$t_content} ADD COLUMN module_id INT NULL AFTER course_id",
         'section_id'          => "ALTER TABLE {$t_content} ADD COLUMN section_id BIGINT UNSIGNED NULL AFTER module_id",
         'quiz_data'           => "ALTER TABLE {$t_content} ADD COLUMN quiz_data LONGTEXT NULL AFTER description",
+        'time_limit_minutes'  => "ALTER TABLE {$t_content} ADD COLUMN time_limit_minutes INT NULL AFTER quiz_data",
+        'attempts_allowed'    => "ALTER TABLE {$t_content} ADD COLUMN attempts_allowed INT DEFAULT 1 AFTER time_limit_minutes",
+        'shuffle_questions'   => "ALTER TABLE {$t_content} ADD COLUMN shuffle_questions TINYINT(1) DEFAULT 0 AFTER attempts_allowed",
+        'pass_percentage'     => "ALTER TABLE {$t_content} ADD COLUMN pass_percentage DECIMAL(5,2) NULL AFTER shuffle_questions",
         'attachment_url'      => "ALTER TABLE {$t_content} ADD COLUMN attachment_url VARCHAR(500) NULL AFTER resource_url",
         'due_date'            => "ALTER TABLE {$t_content} ADD COLUMN due_date DATE NULL AFTER attachment_url",
         'is_visible'          => "ALTER TABLE {$t_content} ADD COLUMN is_visible TINYINT(1) DEFAULT 1 AFTER due_date",
@@ -251,6 +281,8 @@ function nds_staff_ensure_portal_tables() {
         'access_end'          => "ALTER TABLE {$t_content} ADD COLUMN access_end DATETIME NULL AFTER access_start",
         'completion_required' => "ALTER TABLE {$t_content} ADD COLUMN completion_required TINYINT(1) DEFAULT 0 AFTER access_end",
         'min_grade_required'  => "ALTER TABLE {$t_content} ADD COLUMN min_grade_required DECIMAL(5,2) NULL AFTER completion_required",
+        'access_grouping'     => "ALTER TABLE {$t_content} ADD COLUMN access_grouping VARCHAR(20) DEFAULT 'all' AFTER min_grade_required",
+        'allowed_cohort_ids'  => "ALTER TABLE {$t_content} ADD COLUMN allowed_cohort_ids TEXT NULL AFTER access_grouping",
         'sort_order'          => "ALTER TABLE {$t_content} ADD COLUMN sort_order INT DEFAULT 0 AFTER min_grade_required",
     );
     foreach ($migrations as $col => $sql) {
@@ -372,6 +404,8 @@ function nds_staff_ensure_portal_tables() {
         access_end DATETIME NULL,
         completion_required TINYINT(1) DEFAULT 0,
         min_grade_required DECIMAL(5,2) NULL,
+        access_grouping VARCHAR(20) DEFAULT 'all',
+        allowed_cohort_ids TEXT NULL,
         created_by INT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -380,6 +414,17 @@ function nds_staff_ensure_portal_tables() {
         KEY idx_position (position)
     ) $charset_collate;";
     dbDelta($sql_sections);
+
+    $existing_section_cols = $wpdb->get_col("SHOW COLUMNS FROM {$t_sections}");
+    $section_migrations = array(
+        'access_grouping' => "ALTER TABLE {$t_sections} ADD COLUMN access_grouping VARCHAR(20) DEFAULT 'all' AFTER min_grade_required",
+        'allowed_cohort_ids' => "ALTER TABLE {$t_sections} ADD COLUMN allowed_cohort_ids TEXT NULL AFTER access_grouping",
+    );
+    foreach ($section_migrations as $col => $sql) {
+        if (!in_array($col, $existing_section_cols, true)) {
+            $wpdb->query($sql);
+        }
+    }
 }
 
 add_action('init', function () {
@@ -431,6 +476,14 @@ add_action('admin_post_nds_staff_create_content', function () {
     );
     $completion_required = !empty($_POST['completion_required']) ? 1 : 0;
     $min_grade_required = isset($_POST['min_grade_required']) && $_POST['min_grade_required'] !== '' ? (float) $_POST['min_grade_required'] : null;
+    $access_grouping = nds_staff_normalize_access_grouping($_POST['access_grouping'] ?? 'all');
+    $allowed_cohort_ids = $access_grouping === 'cohorts'
+        ? nds_staff_normalize_cohort_ids_csv($_POST['allowed_cohort_ids'] ?? '')
+        : '';
+    $time_limit_minutes = ($content_type === 'quiz' && isset($_POST['time_limit_minutes']) && $_POST['time_limit_minutes'] !== '') ? max(0, (int) $_POST['time_limit_minutes']) : null;
+    $attempts_allowed = ($content_type === 'quiz' && isset($_POST['attempts_allowed']) && $_POST['attempts_allowed'] !== '') ? max(0, (int) $_POST['attempts_allowed']) : 1;
+    $shuffle_questions = ($content_type === 'quiz' && !empty($_POST['shuffle_questions'])) ? 1 : 0;
+    $pass_percentage = ($content_type === 'quiz' && isset($_POST['pass_percentage']) && $_POST['pass_percentage'] !== '') ? max(0.0, min(100.0, (float) $_POST['pass_percentage'])) : null;
 
     // Sanitize and store quiz questions when content type is quiz
     $quiz_data = null;
@@ -480,6 +533,10 @@ add_action('admin_post_nds_staff_create_content', function () {
             'title' => $title,
             'description' => $description,
             'quiz_data' => $quiz_data,
+            'time_limit_minutes' => $content_type === 'quiz' ? $time_limit_minutes : null,
+            'attempts_allowed' => $content_type === 'quiz' ? $attempts_allowed : null,
+            'shuffle_questions' => $content_type === 'quiz' ? $shuffle_questions : 0,
+            'pass_percentage' => $content_type === 'quiz' ? $pass_percentage : null,
             'resource_url' => $resource_url,
             'attachment_url' => $attachment_url,
             'due_date' => !empty($due_date) ? $due_date : null,
@@ -488,9 +545,11 @@ add_action('admin_post_nds_staff_create_content', function () {
             'access_end' => $access_end,
             'completion_required' => $completion_required,
             'min_grade_required' => $min_grade_required,
+            'access_grouping' => $access_grouping,
+            'allowed_cohort_ids' => $allowed_cohort_ids,
             'status' => 'published',
         ),
-        array('%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s')
+        array('%d', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%s')
     );
 
     if ($result === false) {
@@ -580,6 +639,14 @@ add_action('admin_post_nds_staff_update_content', function () {
     );
     $completion_required = !empty($_POST['completion_required']) ? 1 : 0;
     $min_grade_required = isset($_POST['min_grade_required']) && $_POST['min_grade_required'] !== '' ? (float) $_POST['min_grade_required'] : null;
+    $access_grouping = nds_staff_normalize_access_grouping($_POST['access_grouping'] ?? 'all');
+    $allowed_cohort_ids = $access_grouping === 'cohorts'
+        ? nds_staff_normalize_cohort_ids_csv($_POST['allowed_cohort_ids'] ?? '')
+        : '';
+    $time_limit_minutes = ($content_type === 'quiz' && isset($_POST['time_limit_minutes']) && $_POST['time_limit_minutes'] !== '') ? max(0, (int) $_POST['time_limit_minutes']) : null;
+    $attempts_allowed = ($content_type === 'quiz' && isset($_POST['attempts_allowed']) && $_POST['attempts_allowed'] !== '') ? max(0, (int) $_POST['attempts_allowed']) : 1;
+    $shuffle_questions = ($content_type === 'quiz' && !empty($_POST['shuffle_questions'])) ? 1 : 0;
+    $pass_percentage = ($content_type === 'quiz' && isset($_POST['pass_percentage']) && $_POST['pass_percentage'] !== '') ? max(0.0, min(100.0, (float) $_POST['pass_percentage'])) : null;
 
     $quiz_data = $existing['quiz_data'];
     if ($content_type === 'quiz' && !empty($_POST['quiz_data'])) {
@@ -632,6 +699,10 @@ add_action('admin_post_nds_staff_update_content', function () {
             'title' => $title,
             'description' => $description,
             'quiz_data' => $quiz_data,
+            'time_limit_minutes' => $content_type === 'quiz' ? $time_limit_minutes : null,
+            'attempts_allowed' => $content_type === 'quiz' ? $attempts_allowed : null,
+            'shuffle_questions' => $content_type === 'quiz' ? $shuffle_questions : 0,
+            'pass_percentage' => $content_type === 'quiz' ? $pass_percentage : null,
             'resource_url' => $resource_url,
             'attachment_url' => $attachment_url,
             'due_date' => !empty($due_date) ? $due_date : null,
@@ -640,12 +711,14 @@ add_action('admin_post_nds_staff_update_content', function () {
             'access_end' => $access_end,
             'completion_required' => $completion_required,
             'min_grade_required' => $min_grade_required,
+            'access_grouping' => $access_grouping,
+            'allowed_cohort_ids' => $allowed_cohort_ids,
         ),
         array(
             'id' => $content_id,
             'staff_id' => $staff_id,
         ),
-        array('%d', '%d', '%s', '%s', '%s', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f'),
+        array('%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s'),
         array('%d', '%d')
     );
 
@@ -683,6 +756,110 @@ add_action('admin_post_nds_staff_delete_content', function () {
     }
 
     nds_staff_redirect_with_notice('content_notice', 'deleted', 'content');
+});
+
+add_action('admin_post_nds_staff_import_course_content', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_import_course_content_nonce']) || !wp_verify_nonce($_POST['nds_staff_import_course_content_nonce'], 'nds_staff_import_course_content')) {
+        nds_staff_redirect_with_notice('content_error', 'security', 'content');
+    }
+
+    $target_course_id = isset($_POST['target_course_id']) ? (int) $_POST['target_course_id'] : 0;
+    $source_course_id = isset($_POST['source_course_id']) ? (int) $_POST['source_course_id'] : 0;
+
+    if ($target_course_id <= 0 || $source_course_id <= 0) {
+        nds_staff_redirect_with_notice('content_error', 'missing_fields', 'content');
+    }
+
+    if (!nds_staff_course_is_owned_by_lecturer($staff_id, $target_course_id) || !nds_staff_course_is_owned_by_lecturer($staff_id, $source_course_id)) {
+        nds_staff_redirect_with_notice('content_error', 'permission', 'content');
+    }
+
+    if ($target_course_id === $source_course_id) {
+        nds_staff_redirect_with_notice('content_error', 'invalid_import', 'content');
+    }
+
+    $selected_types = isset($_POST['import_types']) && is_array($_POST['import_types'])
+        ? array_values(array_filter(array_map('sanitize_key', wp_unslash($_POST['import_types']))))
+        : array();
+
+    $allowed_types = array('study_material', 'assignment', 'quiz', 'online_course', 'announcement', 'discussion_forum', 'attendance', 'survey', 'workshop');
+    if (empty($selected_types)) {
+        $selected_types = $allowed_types;
+    } else {
+        $selected_types = array_values(array_intersect($selected_types, $allowed_types));
+    }
+
+    if (empty($selected_types)) {
+        nds_staff_redirect_with_notice('content_error', 'missing_fields', 'content');
+    }
+
+    global $wpdb;
+    $content_table = $wpdb->prefix . 'nds_lecturer_content';
+    $type_placeholders = implode(',', array_fill(0, count($selected_types), '%s'));
+
+    $source_items = $wpdb->get_results($wpdb->prepare(
+        "SELECT *
+         FROM {$content_table}
+         WHERE staff_id = %d AND course_id = %d AND content_type IN ({$type_placeholders})
+         ORDER BY created_at ASC
+         LIMIT 200",
+        array_merge(array($staff_id, $source_course_id), $selected_types)
+    ), ARRAY_A);
+
+    if (empty($source_items)) {
+        nds_staff_redirect_with_notice('content_error', 'missing_fields', 'content');
+    }
+
+    $imported_count = 0;
+    foreach ($source_items as $item) {
+        $title = trim((string) ($item['title'] ?? 'Imported Content'));
+        if ($title === '') {
+            $title = 'Imported Content';
+        }
+
+        $inserted = $wpdb->insert(
+            $content_table,
+            array(
+                'staff_id' => $staff_id,
+                'course_id' => $target_course_id,
+                'module_id' => null,
+                'section_id' => null,
+                'content_type' => (string) ($item['content_type'] ?? 'study_material'),
+                'title' => $title . ' (Imported)',
+                'description' => (string) ($item['description'] ?? ''),
+                'quiz_data' => $item['quiz_data'] ?? null,
+                'time_limit_minutes' => isset($item['time_limit_minutes']) && $item['time_limit_minutes'] !== null ? (int) $item['time_limit_minutes'] : null,
+                'attempts_allowed' => isset($item['attempts_allowed']) && $item['attempts_allowed'] !== null ? (int) $item['attempts_allowed'] : null,
+                'shuffle_questions' => !empty($item['shuffle_questions']) ? 1 : 0,
+                'pass_percentage' => isset($item['pass_percentage']) && $item['pass_percentage'] !== null ? (float) $item['pass_percentage'] : null,
+                'resource_url' => (string) ($item['resource_url'] ?? ''),
+                'attachment_url' => (string) ($item['attachment_url'] ?? ''),
+                'due_date' => !empty($item['due_date']) ? (string) $item['due_date'] : null,
+                'is_visible' => 0,
+                'access_start' => null,
+                'access_end' => null,
+                'completion_required' => !empty($item['completion_required']) ? 1 : 0,
+                'min_grade_required' => isset($item['min_grade_required']) && $item['min_grade_required'] !== null ? (float) $item['min_grade_required'] : null,
+                'access_grouping' => isset($item['access_grouping']) ? nds_staff_normalize_access_grouping((string) $item['access_grouping']) : 'all',
+                'allowed_cohort_ids' => isset($item['allowed_cohort_ids']) ? nds_staff_normalize_cohort_ids_csv((string) $item['allowed_cohort_ids']) : '',
+                'sort_order' => isset($item['sort_order']) ? (int) $item['sort_order'] : 0,
+                'status' => 'published',
+            ),
+            array('%d', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%d', '%s')
+        );
+
+        if ($inserted !== false) {
+            $imported_count++;
+        }
+    }
+
+    if ($imported_count <= 0) {
+        nds_staff_redirect_with_notice('content_error', 'save_failed', 'content');
+    }
+
+    nds_staff_redirect_with_notice('content_notice', 'imported', 'content');
 });
 
 add_action('admin_post_nds_staff_create_assessment', function () {
@@ -746,6 +923,190 @@ add_action('admin_post_nds_staff_create_assessment', function () {
     }
 
     nds_staff_redirect_with_notice('assessment_notice', 'created', 'assessments');
+});
+
+add_action('admin_post_nds_staff_restore_course_content', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_restore_course_content_nonce']) || !wp_verify_nonce($_POST['nds_staff_restore_course_content_nonce'], 'nds_staff_restore_course_content')) {
+        nds_staff_redirect_with_notice('content_error', 'security', 'content');
+    }
+
+    $target_course_id = isset($_POST['target_course_id']) ? (int) $_POST['target_course_id'] : 0;
+    if ($target_course_id <= 0 || !nds_staff_course_is_owned_by_lecturer($staff_id, $target_course_id)) {
+        nds_staff_redirect_with_notice('content_error', 'permission', 'content');
+    }
+
+    if (empty($_FILES['backup_file']) || (int) ($_FILES['backup_file']['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+        nds_staff_redirect_with_notice('content_error', 'missing_fields', 'content');
+    }
+
+    $tmp_path = (string) ($_FILES['backup_file']['tmp_name'] ?? '');
+    if ($tmp_path === '' || !is_uploaded_file($tmp_path)) {
+        nds_staff_redirect_with_notice('content_error', 'invalid_restore', 'content');
+    }
+
+    $raw_json = file_get_contents($tmp_path);
+    if ($raw_json === false || $raw_json === '') {
+        nds_staff_redirect_with_notice('content_error', 'invalid_restore', 'content');
+    }
+
+    $payload = json_decode($raw_json, true);
+    if (!is_array($payload)) {
+        nds_staff_redirect_with_notice('content_error', 'invalid_restore', 'content');
+    }
+
+    $sections_payload = isset($payload['sections']) && is_array($payload['sections']) ? array_values($payload['sections']) : array();
+    $content_payload = isset($payload['content']) && is_array($payload['content']) ? array_values($payload['content']) : array();
+    if (empty($sections_payload) && empty($content_payload)) {
+        nds_staff_redirect_with_notice('content_error', 'invalid_restore', 'content');
+    }
+
+    $source_section_ids = array();
+    foreach ($sections_payload as $section_item) {
+        if (!is_array($section_item)) {
+            continue;
+        }
+        $source_id = isset($section_item['id']) ? (int) $section_item['id'] : 0;
+        if ($source_id > 0) {
+            $source_section_ids[$source_id] = true;
+        }
+    }
+
+    foreach ($content_payload as $content_item) {
+        if (!is_array($content_item)) {
+            continue;
+        }
+        $content_section_id = isset($content_item['section_id']) ? (int) $content_item['section_id'] : 0;
+        if ($content_section_id > 0 && !isset($source_section_ids[$content_section_id])) {
+            nds_staff_redirect_with_notice('content_error', 'invalid_restore_mapping', 'content');
+        }
+    }
+
+    global $wpdb;
+    $content_table = $wpdb->prefix . 'nds_lecturer_content';
+    $sections_table = $wpdb->prefix . 'nds_course_sections';
+    $target_module_ids = $wpdb->get_col($wpdb->prepare(
+        "SELECT id FROM {$wpdb->prefix}nds_modules WHERE course_id = %d",
+        $target_course_id
+    ));
+    $target_module_ids = array_values(array_map('intval', $target_module_ids ?: array()));
+
+    $allowed_types = array('study_material', 'assignment', 'quiz', 'online_course', 'announcement', 'discussion_forum', 'attendance', 'survey', 'workshop');
+    $section_id_map = array();
+    $restored_sections = 0;
+    $restored_content = 0;
+
+    $wpdb->query('START TRANSACTION');
+
+    foreach (array_slice($sections_payload, 0, 500) as $section_item) {
+        if (!is_array($section_item)) {
+            continue;
+        }
+
+        $title = isset($section_item['title']) ? sanitize_text_field((string) $section_item['title']) : '';
+        if ($title === '') {
+            continue;
+        }
+
+        $source_section_id = isset($section_item['id']) ? (int) $section_item['id'] : 0;
+        $inserted = $wpdb->insert(
+            $sections_table,
+            array(
+                'course_id' => $target_course_id,
+                'title' => $title,
+                'description' => isset($section_item['description']) ? sanitize_textarea_field((string) $section_item['description']) : '',
+                'position' => isset($section_item['position']) ? (int) $section_item['position'] : 0,
+                'is_visible' => !empty($section_item['is_visible']) ? 1 : 0,
+                'access_start' => !empty($section_item['access_start']) ? nds_staff_normalize_datetime((string) $section_item['access_start']) : null,
+                'access_end' => !empty($section_item['access_end']) ? nds_staff_normalize_datetime((string) $section_item['access_end']) : null,
+                'completion_required' => !empty($section_item['completion_required']) ? 1 : 0,
+                'min_grade_required' => isset($section_item['min_grade_required']) && $section_item['min_grade_required'] !== null ? (float) $section_item['min_grade_required'] : null,
+                'access_grouping' => isset($section_item['access_grouping']) ? nds_staff_normalize_access_grouping((string) $section_item['access_grouping']) : 'all',
+                'allowed_cohort_ids' => isset($section_item['allowed_cohort_ids']) ? nds_staff_normalize_cohort_ids_csv((string) $section_item['allowed_cohort_ids']) : '',
+                'created_by' => $staff_id,
+            ),
+            array('%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%d')
+        );
+
+        if ($inserted === false) {
+            $wpdb->query('ROLLBACK');
+            nds_staff_redirect_with_notice('content_error', 'save_failed', 'content');
+        }
+
+        $restored_sections++;
+        if ($source_section_id > 0) {
+            $section_id_map[$source_section_id] = (int) $wpdb->insert_id;
+        }
+    }
+
+    foreach (array_slice($content_payload, 0, 1000) as $item) {
+        if (!is_array($item)) {
+            continue;
+        }
+
+        $content_type = isset($item['content_type']) ? sanitize_key((string) $item['content_type']) : 'study_material';
+        if (!in_array($content_type, $allowed_types, true)) {
+            continue;
+        }
+
+        $title = isset($item['title']) ? sanitize_text_field((string) $item['title']) : '';
+        if ($title === '') {
+            $title = 'Restored Content';
+        }
+
+        $source_module_id = isset($item['module_id']) ? (int) $item['module_id'] : 0;
+        $mapped_module_id = in_array($source_module_id, $target_module_ids, true) ? $source_module_id : null;
+
+        $source_section_id = isset($item['section_id']) ? (int) $item['section_id'] : 0;
+        $mapped_section_id = $source_section_id > 0 && isset($section_id_map[$source_section_id]) ? (int) $section_id_map[$source_section_id] : null;
+
+        $inserted = $wpdb->insert(
+            $content_table,
+            array(
+                'staff_id' => $staff_id,
+                'course_id' => $target_course_id,
+                'module_id' => $mapped_module_id,
+                'section_id' => $mapped_section_id,
+                'content_type' => $content_type,
+                'title' => $title . ' (Restored)',
+                'description' => isset($item['description']) ? wp_kses_post((string) $item['description']) : '',
+                'quiz_data' => isset($item['quiz_data']) ? wp_json_encode(json_decode((string) $item['quiz_data'], true)) : null,
+                'time_limit_minutes' => isset($item['time_limit_minutes']) && $item['time_limit_minutes'] !== null ? (int) $item['time_limit_minutes'] : null,
+                'attempts_allowed' => isset($item['attempts_allowed']) && $item['attempts_allowed'] !== null ? (int) $item['attempts_allowed'] : null,
+                'shuffle_questions' => !empty($item['shuffle_questions']) ? 1 : 0,
+                'pass_percentage' => isset($item['pass_percentage']) && $item['pass_percentage'] !== null ? (float) $item['pass_percentage'] : null,
+                'resource_url' => isset($item['resource_url']) ? esc_url_raw((string) $item['resource_url']) : '',
+                'attachment_url' => isset($item['attachment_url']) ? esc_url_raw((string) $item['attachment_url']) : '',
+                'due_date' => !empty($item['due_date']) ? sanitize_text_field((string) $item['due_date']) : null,
+                'is_visible' => 0,
+                'access_start' => !empty($item['access_start']) ? nds_staff_normalize_datetime((string) $item['access_start']) : null,
+                'access_end' => !empty($item['access_end']) ? nds_staff_normalize_datetime((string) $item['access_end']) : null,
+                'completion_required' => !empty($item['completion_required']) ? 1 : 0,
+                'min_grade_required' => isset($item['min_grade_required']) && $item['min_grade_required'] !== null ? (float) $item['min_grade_required'] : null,
+                'access_grouping' => isset($item['access_grouping']) ? nds_staff_normalize_access_grouping((string) $item['access_grouping']) : 'all',
+                'allowed_cohort_ids' => isset($item['allowed_cohort_ids']) ? nds_staff_normalize_cohort_ids_csv((string) $item['allowed_cohort_ids']) : '',
+                'sort_order' => isset($item['sort_order']) ? (int) $item['sort_order'] : 0,
+                'status' => 'published',
+            ),
+            array('%d', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%d', '%s')
+        );
+
+        if ($inserted === false) {
+            $wpdb->query('ROLLBACK');
+            nds_staff_redirect_with_notice('content_error', 'save_failed', 'content');
+        }
+
+        $restored_content++;
+    }
+
+    if ($restored_sections <= 0 && $restored_content <= 0) {
+        $wpdb->query('ROLLBACK');
+        nds_staff_redirect_with_notice('content_error', 'invalid_restore', 'content');
+    }
+
+    $wpdb->query('COMMIT');
+    nds_staff_redirect_with_notice('content_notice', 'restored', 'content');
 });
 
 add_action('admin_post_nds_staff_create_question', function () {
@@ -1189,9 +1550,11 @@ add_action('admin_post_nds_staff_add_section', function () {
             'access_end' => !empty($_POST['access_end']) ? sanitize_text_field(wp_unslash($_POST['access_end'])) : null,
             'completion_required' => !empty($_POST['completion_required']) ? 1 : 0,
             'min_grade_required' => !empty($_POST['min_grade_required']) ? (float) $_POST['min_grade_required'] : null,
+            'access_grouping' => nds_staff_normalize_access_grouping($_POST['access_grouping'] ?? 'all'),
+            'allowed_cohort_ids' => nds_staff_normalize_cohort_ids_csv($_POST['allowed_cohort_ids'] ?? ''),
             'created_by' => $staff_id,
         ),
-        array('%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%f', '%d')
+        array('%d', '%s', '%s', '%d', '%d', '%s', '%s', '%d', '%f', '%s', '%s', '%d')
     );
 
     nds_staff_redirect_with_notice('structure_notice', 'section_created', 'structure');
@@ -1226,6 +1589,210 @@ add_action('admin_post_nds_staff_update_section_visibility', function () {
     );
 
     nds_staff_redirect_with_notice('structure_notice', 'section_updated', 'structure');
+});
+
+add_action('admin_post_nds_staff_update_section', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_update_section_nonce']) || !wp_verify_nonce($_POST['nds_staff_update_section_nonce'], 'nds_staff_update_section')) {
+        nds_staff_redirect_with_notice('structure_error', 'security', 'structure');
+    }
+
+    $section_id = isset($_POST['section_id']) ? (int) $_POST['section_id'] : 0;
+    if ($section_id <= 0) {
+        nds_staff_redirect_with_notice('structure_error', 'missing_fields', 'structure');
+    }
+
+    global $wpdb;
+    $section = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, course_id FROM {$wpdb->prefix}nds_course_sections WHERE id = %d",
+        $section_id
+    ), ARRAY_A);
+
+    if (empty($section) || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) $section['course_id'])) {
+        nds_staff_redirect_with_notice('structure_error', 'permission', 'structure');
+    }
+
+    $title = isset($_POST['title']) ? sanitize_text_field(wp_unslash($_POST['title'])) : '';
+    if ($title === '') {
+        nds_staff_redirect_with_notice('structure_error', 'missing_fields', 'structure');
+    }
+
+    list($access_start, $access_end) = nds_staff_normalize_access_window(
+        $_POST['access_start'] ?? '',
+        $_POST['access_end'] ?? ''
+    );
+
+    $updated = $wpdb->update(
+        $wpdb->prefix . 'nds_course_sections',
+        array(
+            'title' => $title,
+            'description' => isset($_POST['description']) ? sanitize_textarea_field(wp_unslash($_POST['description'])) : '',
+            'position' => isset($_POST['position']) ? (int) $_POST['position'] : 0,
+            'is_visible' => !empty($_POST['is_visible']) ? 1 : 0,
+            'access_start' => $access_start,
+            'access_end' => $access_end,
+            'completion_required' => !empty($_POST['completion_required']) ? 1 : 0,
+            'min_grade_required' => isset($_POST['min_grade_required']) && $_POST['min_grade_required'] !== '' ? (float) $_POST['min_grade_required'] : null,
+            'access_grouping' => nds_staff_normalize_access_grouping($_POST['access_grouping'] ?? 'all'),
+            'allowed_cohort_ids' => nds_staff_normalize_cohort_ids_csv($_POST['allowed_cohort_ids'] ?? ''),
+        ),
+        array('id' => $section_id),
+        array('%s', '%s', '%d', '%d', '%s', '%s', '%d', '%f', '%s', '%s'),
+        array('%d')
+    );
+
+    if ($updated === false) {
+        nds_staff_redirect_with_notice('structure_error', 'save_failed', 'structure');
+    }
+
+    nds_staff_redirect_with_notice('structure_notice', 'section_updated', 'structure');
+});
+
+add_action('admin_post_nds_staff_move_section', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_move_section_nonce']) || !wp_verify_nonce($_POST['nds_staff_move_section_nonce'], 'nds_staff_move_section')) {
+        nds_staff_redirect_with_notice('structure_error', 'security', 'structure');
+    }
+
+    $section_id = isset($_POST['section_id']) ? (int) $_POST['section_id'] : 0;
+    $direction = isset($_POST['direction']) ? sanitize_key((string) wp_unslash($_POST['direction'])) : '';
+    if ($section_id <= 0 || !in_array($direction, array('up', 'down'), true)) {
+        nds_staff_redirect_with_notice('structure_error', 'missing_fields', 'structure');
+    }
+
+    global $wpdb;
+    $section = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, course_id FROM {$wpdb->prefix}nds_course_sections WHERE id = %d",
+        $section_id
+    ), ARRAY_A);
+
+    if (empty($section) || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) $section['course_id'])) {
+        nds_staff_redirect_with_notice('structure_error', 'permission', 'structure');
+    }
+
+    $course_id = (int) $section['course_id'];
+    $ordered_sections = $wpdb->get_results($wpdb->prepare(
+        "SELECT id FROM {$wpdb->prefix}nds_course_sections WHERE course_id = %d ORDER BY position ASC, id ASC",
+        $course_id
+    ), ARRAY_A);
+
+    if (empty($ordered_sections)) {
+        nds_staff_redirect_with_notice('structure_notice', 'section_updated', 'structure');
+    }
+
+    $ordered_ids = array_map(static function ($row) {
+        return (int) ($row['id'] ?? 0);
+    }, $ordered_sections);
+
+    $index = array_search($section_id, $ordered_ids, true);
+    if ($index === false) {
+        nds_staff_redirect_with_notice('structure_error', 'permission', 'structure');
+    }
+
+    $target_index = $direction === 'up' ? $index - 1 : $index + 1;
+    if ($target_index < 0 || $target_index >= count($ordered_ids)) {
+        nds_staff_redirect_with_notice('structure_notice', 'section_updated', 'structure');
+    }
+
+    $tmp = $ordered_ids[$target_index];
+    $ordered_ids[$target_index] = $ordered_ids[$index];
+    $ordered_ids[$index] = $tmp;
+
+    foreach ($ordered_ids as $pos => $sid) {
+        $wpdb->update(
+            $wpdb->prefix . 'nds_course_sections',
+            array('position' => ($pos + 1) * 10),
+            array('id' => $sid),
+            array('%d'),
+            array('%d')
+        );
+    }
+
+    nds_staff_redirect_with_notice('structure_notice', 'section_updated', 'structure');
+});
+
+add_action('admin_post_nds_staff_delete_section', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_delete_section_nonce']) || !wp_verify_nonce($_POST['nds_staff_delete_section_nonce'], 'nds_staff_delete_section')) {
+        nds_staff_redirect_with_notice('structure_error', 'security', 'structure');
+    }
+
+    $section_id = isset($_POST['section_id']) ? (int) $_POST['section_id'] : 0;
+    if ($section_id <= 0) {
+        nds_staff_redirect_with_notice('structure_error', 'missing_fields', 'structure');
+    }
+
+    global $wpdb;
+    $section = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, course_id FROM {$wpdb->prefix}nds_course_sections WHERE id = %d",
+        $section_id
+    ), ARRAY_A);
+
+    if (empty($section) || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) $section['course_id'])) {
+        nds_staff_redirect_with_notice('structure_error', 'permission', 'structure');
+    }
+
+    $wpdb->update(
+        $wpdb->prefix . 'nds_lecturer_content',
+        array('section_id' => null),
+        array('section_id' => $section_id),
+        array('%d'),
+        array('%d')
+    );
+
+    $deleted = $wpdb->delete(
+        $wpdb->prefix . 'nds_course_sections',
+        array('id' => $section_id),
+        array('%d')
+    );
+
+    if ($deleted === false) {
+        nds_staff_redirect_with_notice('structure_error', 'save_failed', 'structure');
+    }
+
+    nds_staff_redirect_with_notice('structure_notice', 'section_deleted', 'structure');
+});
+
+add_action('admin_post_nds_staff_toggle_content_visibility', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    if (!isset($_POST['nds_staff_toggle_content_visibility_nonce']) || !wp_verify_nonce($_POST['nds_staff_toggle_content_visibility_nonce'], 'nds_staff_toggle_content_visibility')) {
+        nds_staff_redirect_with_notice('structure_error', 'security', 'structure');
+    }
+
+    $content_id = isset($_POST['content_id']) ? (int) $_POST['content_id'] : 0;
+    $is_visible = !empty($_POST['is_visible']) ? 1 : 0;
+
+    if ($content_id <= 0) {
+        nds_staff_redirect_with_notice('structure_error', 'missing_fields', 'structure');
+    }
+
+    global $wpdb;
+    $content = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, course_id FROM {$wpdb->prefix}nds_lecturer_content WHERE id = %d LIMIT 1",
+        $content_id
+    ), ARRAY_A);
+
+    if (empty($content) || !nds_staff_course_is_owned_by_lecturer($staff_id, (int) $content['course_id'])) {
+        nds_staff_redirect_with_notice('structure_error', 'permission', 'structure');
+    }
+
+    $updated = $wpdb->update(
+        $wpdb->prefix . 'nds_lecturer_content',
+        array('is_visible' => $is_visible),
+        array('id' => $content_id),
+        array('%d'),
+        array('%d')
+    );
+
+    if ($updated === false) {
+        nds_staff_redirect_with_notice('structure_error', 'save_failed', 'structure');
+    }
+
+    nds_staff_redirect_with_notice('structure_notice', 'content_updated', 'structure');
 });
 
 add_action('admin_post_nds_staff_export_gradebook', function () {
@@ -1272,5 +1839,46 @@ add_action('admin_post_nds_staff_export_gradebook', function () {
         ));
     }
     fclose($output);
+    exit;
+});
+
+add_action('admin_post_nds_staff_export_course_content', function () {
+    $staff_id = nds_staff_require_lecturer();
+
+    $course_id = isset($_GET['course_id']) ? (int) $_GET['course_id'] : 0;
+    if ($course_id <= 0 || !nds_staff_course_is_owned_by_lecturer($staff_id, $course_id)) {
+        wp_die('Unauthorized course');
+    }
+
+    global $wpdb;
+    $content_rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}nds_lecturer_content
+         WHERE staff_id = %d AND course_id = %d
+         ORDER BY sort_order ASC, created_at ASC",
+        $staff_id,
+        $course_id
+    ), ARRAY_A);
+
+    $section_rows = $wpdb->get_results($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}nds_course_sections
+         WHERE course_id = %d
+         ORDER BY position ASC, id ASC",
+        $course_id
+    ), ARRAY_A);
+
+    $export_payload = array(
+        'schema_version' => 2,
+        'exported_at' => current_time('mysql'),
+        'staff_id' => $staff_id,
+        'course_id' => $course_id,
+        'sections' => $section_rows,
+        'content' => $content_rows,
+    );
+
+    nocache_headers();
+    header('Content-Type: application/json; charset=utf-8');
+    header('Content-Disposition: attachment; filename="course-content-' . $course_id . '-' . gmdate('Ymd-His') . '.json"');
+
+    echo wp_json_encode($export_payload);
     exit;
 });

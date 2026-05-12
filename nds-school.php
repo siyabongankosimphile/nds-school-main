@@ -853,7 +853,10 @@ function nds_portal_ensure_quiz_attempts_table() {
         correct_answers INT NOT NULL DEFAULT 0,
         score_percent DECIMAL(5,2) NULL,
         answers_json LONGTEXT NULL,
+        question_order_json LONGTEXT NULL,
+        flagged_questions VARCHAR(255) NULL,
         started_at DATETIME NULL,
+        duration_seconds INT NULL,
         submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
         ip_address VARCHAR(45) NULL,
         user_agent VARCHAR(255) NULL,
@@ -872,11 +875,20 @@ function nds_portal_ensure_quiz_attempts_table() {
         if (!in_array('started_at', $existing_cols, true)) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN started_at DATETIME NULL AFTER answers_json");
         }
+        if (!in_array('question_order_json', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN question_order_json LONGTEXT NULL AFTER answers_json");
+        }
         if (!in_array('ip_address', $existing_cols, true)) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN ip_address VARCHAR(45) NULL");
         }
         if (!in_array('user_agent', $existing_cols, true)) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN user_agent VARCHAR(255) NULL");
+        }
+        if (!in_array('duration_seconds', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN duration_seconds INT NULL AFTER started_at");
+        }
+        if (!in_array('flagged_questions', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN flagged_questions VARCHAR(255) NULL AFTER answers_json");
         }
     }
 
@@ -900,6 +912,73 @@ function nds_portal_get_client_ip() {
         }
     }
     return '';
+}
+
+function nds_portal_get_student_cohort_ids($student_id) {
+    global $wpdb;
+
+    $student_id = (int) $student_id;
+    if ($student_id <= 0) {
+        return array();
+    }
+
+    $rows = $wpdb->get_col($wpdb->prepare(
+        "SELECT cohort_id
+         FROM {$wpdb->prefix}nds_student_cohorts
+         WHERE student_id = %d
+           AND (status = 'active' OR status IS NULL)",
+        $student_id
+    ));
+
+    return array_values(array_unique(array_filter(array_map('intval', $rows ?: array()), static function ($id) {
+        return $id > 0;
+    })));
+}
+
+function nds_portal_access_grouping_allows_student($access_grouping, $allowed_cohort_ids_csv, array $student_cohort_ids) {
+    $grouping = sanitize_key((string) $access_grouping);
+    if ($grouping !== 'cohorts') {
+        return true;
+    }
+
+    $allowed_ids = array_values(array_filter(array_map('intval', preg_split('/[^0-9]+/', (string) $allowed_cohort_ids_csv)), static function ($id) {
+        return $id > 0;
+    }));
+
+    if (empty($allowed_ids)) {
+        return false;
+    }
+
+    return !empty(array_intersect($allowed_ids, $student_cohort_ids));
+}
+
+function nds_portal_ensure_content_views_table() {
+    global $wpdb;
+
+    $table = $wpdb->prefix . 'nds_content_views';
+    $charset_collate = $wpdb->get_charset_collate();
+
+    $sql = "CREATE TABLE IF NOT EXISTS {$table} (
+        id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+        content_id BIGINT UNSIGNED NOT NULL,
+        student_id INT NOT NULL,
+        module_id INT NULL,
+        course_id INT NULL,
+        view_type VARCHAR(30) NOT NULL DEFAULT 'open',
+        source VARCHAR(30) NOT NULL DEFAULT 'portal',
+        viewed_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        ip_address VARCHAR(45) NULL,
+        user_agent VARCHAR(255) NULL,
+        PRIMARY KEY (id),
+        KEY idx_content_student (content_id, student_id),
+        KEY idx_student (student_id),
+        KEY idx_viewed_at (viewed_at)
+    ) {$charset_collate}";
+
+    require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+    dbDelta($sql);
+
+    return $table;
 }
 
 /**
@@ -963,21 +1042,35 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
     }
 
     global $wpdb;
-    $content = $wpdb->get_row($wpdb->prepare(
-                "SELECT id, module_id, course_id, title, quiz_data, min_grade_required
-         FROM {$wpdb->prefix}nds_lecturer_content
-         WHERE id = %d
-           AND content_type = 'quiz'
-           AND is_visible = 1
-           AND status = 'published'
-           AND (access_start IS NULL OR access_start <= NOW())
-           AND (access_end IS NULL OR access_end >= NOW())
-         LIMIT 1",
-        $content_id
-    ), ARRAY_A);
+        $content = $wpdb->get_row($wpdb->prepare(
+                                                                "SELECT lc.id, lc.module_id, lc.course_id, lc.title, lc.quiz_data, lc.min_grade_required, lc.time_limit_minutes, lc.attempts_allowed, lc.pass_percentage,
+                                lc.access_grouping, lc.allowed_cohort_ids,
+                                cs.access_grouping AS section_access_grouping, cs.allowed_cohort_ids AS section_allowed_cohort_ids
+                 FROM {$wpdb->prefix}nds_lecturer_content lc
+                 LEFT JOIN {$wpdb->prefix}nds_course_sections cs ON cs.id = lc.section_id
+                 WHERE lc.id = %d
+                     AND lc.content_type = 'quiz'
+                     AND lc.is_visible = 1
+                     AND lc.status = 'published'
+                     AND (lc.access_start IS NULL OR lc.access_start <= NOW())
+                     AND (lc.access_end IS NULL OR lc.access_end >= NOW())
+                     AND (cs.id IS NULL OR cs.is_visible = 1)
+                     AND (cs.id IS NULL OR cs.access_start IS NULL OR cs.access_start <= NOW())
+                     AND (cs.id IS NULL OR cs.access_end IS NULL OR cs.access_end >= NOW())
+                 LIMIT 1",
+                $content_id
+        ), ARRAY_A);
 
     if (empty($content)) {
         wp_send_json_error('Quiz is not available anymore.');
+    }
+
+    $student_cohort_ids = nds_portal_get_student_cohort_ids($student_id);
+    if (!nds_portal_access_grouping_allows_student($content['access_grouping'] ?? 'all', $content['allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('This quiz is restricted to a different learner group.');
+    }
+    if (!nds_portal_access_grouping_allows_student($content['section_access_grouping'] ?? 'all', $content['section_allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('This quiz section is restricted to a different learner group.');
     }
 
     $module_id = (int) ($content['module_id'] ?? 0);
@@ -1015,15 +1108,64 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
         }
     }
 
-    $questions = json_decode((string) ($content['quiz_data'] ?? ''), true);
-    if (!is_array($questions) || empty($questions)) {
+    $original_questions = json_decode((string) ($content['quiz_data'] ?? ''), true);
+    if (!is_array($original_questions) || empty($original_questions)) {
         wp_send_json_error('Quiz questions could not be loaded.');
+    }
+
+    $questions = array_values($original_questions);
+
+    $question_order_raw = isset($_POST['question_order']) ? sanitize_text_field(wp_unslash($_POST['question_order'])) : '';
+    $question_order = array();
+    if ($question_order_raw !== '') {
+        $question_order = array_values(array_filter(array_map('intval', explode(',', $question_order_raw)), static function ($value) {
+            return $value >= 0;
+        }));
+
+        $expected_count = count($original_questions);
+        $unique_count = count(array_unique($question_order));
+        $valid_set = $unique_count === $expected_count;
+        if ($valid_set) {
+            $expected_map = range(0, $expected_count - 1);
+            sort($question_order);
+            $valid_set = ($question_order === $expected_map);
+        }
+
+        if (!$valid_set) {
+            wp_send_json_error('Invalid question order submitted. Please restart the quiz attempt.');
+        }
+
+        $question_order = array_values(array_map('intval', explode(',', $question_order_raw)));
+        $reordered_questions = array();
+        foreach ($question_order as $source_idx) {
+            if (!isset($original_questions[$source_idx])) {
+                wp_send_json_error('Invalid quiz question mapping detected. Please restart the quiz attempt.');
+            }
+            $reordered_questions[] = $original_questions[$source_idx];
+        }
+        $questions = $reordered_questions;
+    }
+
+    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+
+    $attempts_allowed = isset($content['attempts_allowed']) ? (int) $content['attempts_allowed'] : 1;
+    $attempts_used = (int) $wpdb->get_var($wpdb->prepare(
+        "SELECT COUNT(*) FROM {$quiz_attempts_table} WHERE content_id = %d AND student_id = %d",
+        $content_id,
+        $student_id
+    ));
+    if ($attempts_allowed > 0 && $attempts_used >= $attempts_allowed) {
+        wp_send_json_error('You have reached the maximum number of attempts for this quiz.');
     }
 
     $answers_raw = isset($_POST['answers']) ? wp_unslash($_POST['answers']) : array();
     if (!is_array($answers_raw)) {
         $answers_raw = array();
     }
+
+    // NEW: Capture flagged questions
+    $flagged_questions_raw = isset($_POST['flagged_questions']) ? sanitize_text_field(wp_unslash($_POST['flagged_questions'])) : '';
+    $flagged_questions = $flagged_questions_raw !== '' ? $flagged_questions_raw : null;
 
     $total_questions = count($questions);
     $graded_questions = 0;
@@ -1089,12 +1231,14 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
     $score_percent = $graded_questions > 0
         ? round(($correct_answers / $graded_questions) * 100, 2)
         : null;
-    $pass_threshold = isset($content['min_grade_required']) && $content['min_grade_required'] !== null
-        ? max(0.0, min(100.0, (float) $content['min_grade_required']))
-        : 50.0;
+    $pass_threshold = 50.0;
+    if (isset($content['pass_percentage']) && $content['pass_percentage'] !== null && $content['pass_percentage'] !== '') {
+        $pass_threshold = max(0.0, min(100.0, (float) $content['pass_percentage']));
+    } elseif (isset($content['min_grade_required']) && $content['min_grade_required'] !== null && $content['min_grade_required'] !== '') {
+        $pass_threshold = max(0.0, min(100.0, (float) $content['min_grade_required']));
+    }
     $passed = $score_percent !== null ? ($score_percent >= $pass_threshold) : null;
 
-    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
     $attempt_no = (int) $wpdb->get_var($wpdb->prepare(
         "SELECT COALESCE(MAX(attempt_no), 0) + 1
          FROM {$quiz_attempts_table}
@@ -1109,10 +1253,26 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
     // Recover started_at from transient set when the student opened the quiz; fallback to now.
     $start_transient_key = 'nds_quiz_start_' . $student_id . '_' . $content_id;
     $started_at_value = get_transient($start_transient_key);
+    $submitted_at_value = current_time('mysql');
     if (empty($started_at_value)) {
-        $started_at_value = current_time('mysql');
-    } else {
+        $started_at_value = $submitted_at_value;
+    }
+
+    $started_ts = strtotime((string) $started_at_value);
+    $submitted_ts = strtotime((string) $submitted_at_value);
+    if ($started_ts === false || $submitted_ts === false) {
+        $started_ts = $submitted_ts !== false ? $submitted_ts : time();
+        $submitted_ts = $submitted_ts !== false ? $submitted_ts : time();
+        $started_at_value = date('Y-m-d H:i:s', $started_ts);
+        $submitted_at_value = date('Y-m-d H:i:s', $submitted_ts);
+    }
+
+    $duration_seconds = max(0, (int) ($submitted_ts - $started_ts));
+    $time_limit_minutes = isset($content['time_limit_minutes']) ? max(0, (int) $content['time_limit_minutes']) : 0;
+    $time_limit_seconds = $time_limit_minutes > 0 ? $time_limit_minutes * 60 : 0;
+    if ($time_limit_seconds > 0 && $duration_seconds > ($time_limit_seconds + 30)) {
         delete_transient($start_transient_key);
+        wp_send_json_error('Time limit exceeded for this quiz attempt. Please start a new attempt if available.');
     }
 
     $client_ip = function_exists('nds_portal_get_client_ip') ? nds_portal_get_client_ip() : '';
@@ -1131,17 +1291,22 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
             'correct_answers' => $correct_answers,
             'score_percent' => $score_percent,
             'answers_json' => wp_json_encode($normalized_answers),
+            'question_order_json' => !empty($question_order) ? wp_json_encode($question_order) : null,
+            'flagged_questions' => $flagged_questions,
             'started_at' => $started_at_value,
-            'submitted_at' => current_time('mysql'),
+            'duration_seconds' => $duration_seconds,
+            'submitted_at' => $submitted_at_value,
             'ip_address' => $client_ip,
             'user_agent' => $user_agent,
         ),
-        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%s', '%s')
+        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s')
     );
 
     if ($saved === false) {
         wp_send_json_error('Could not save your quiz attempt. Please try again.');
     }
+
+    delete_transient($start_transient_key);
 
     wp_send_json_success(array(
         'message' => 'Quiz submitted successfully.',
@@ -1152,8 +1317,11 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
         'score_percent' => $score_percent,
         'pass_threshold' => $pass_threshold,
         'passed' => $passed,
+        'duration_seconds' => $duration_seconds,
+        'time_limit_seconds' => $time_limit_seconds,
         'started_at' => $started_at_value,
-        'submitted_at' => current_time('mysql'),
+        'submitted_at' => $submitted_at_value,
+        'flagged_questions' => $flagged_questions,
         'review' => $review_rows,
     ));
 });
@@ -1172,6 +1340,51 @@ add_action('wp_ajax_nds_portal_start_quiz_attempt', function () {
     if ($student_id <= 0 || $content_id <= 0) {
         wp_send_json_error('Invalid request.');
     }
+
+    global $wpdb;
+        $content = $wpdb->get_row($wpdb->prepare(
+                "SELECT lc.id, lc.attempts_allowed, lc.access_grouping, lc.allowed_cohort_ids,
+                                cs.access_grouping AS section_access_grouping, cs.allowed_cohort_ids AS section_allowed_cohort_ids
+                 FROM {$wpdb->prefix}nds_lecturer_content lc
+                 LEFT JOIN {$wpdb->prefix}nds_course_sections cs ON cs.id = lc.section_id
+                 WHERE lc.id = %d
+                     AND lc.content_type = 'quiz'
+                     AND lc.is_visible = 1
+                     AND lc.status = 'published'
+                     AND (lc.access_start IS NULL OR lc.access_start <= NOW())
+                     AND (lc.access_end IS NULL OR lc.access_end >= NOW())
+                     AND (cs.id IS NULL OR cs.is_visible = 1)
+                     AND (cs.id IS NULL OR cs.access_start IS NULL OR cs.access_start <= NOW())
+                     AND (cs.id IS NULL OR cs.access_end IS NULL OR cs.access_end >= NOW())
+                 LIMIT 1",
+                $content_id
+        ), ARRAY_A);
+
+    if (empty($content)) {
+        wp_send_json_error('Quiz is not available anymore.');
+    }
+
+    $student_cohort_ids = nds_portal_get_student_cohort_ids($student_id);
+    if (!nds_portal_access_grouping_allows_student($content['access_grouping'] ?? 'all', $content['allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('This quiz is restricted to a different learner group.');
+    }
+    if (!nds_portal_access_grouping_allows_student($content['section_access_grouping'] ?? 'all', $content['section_allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('This quiz section is restricted to a different learner group.');
+    }
+
+    $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
+    $attempts_allowed = isset($content['attempts_allowed']) ? (int) $content['attempts_allowed'] : 1;
+    if ($attempts_allowed > 0) {
+        $attempts_used = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM {$quiz_attempts_table} WHERE content_id = %d AND student_id = %d",
+            $content_id,
+            $student_id
+        ));
+        if ($attempts_used >= $attempts_allowed) {
+            wp_send_json_error('You have reached the maximum number of attempts for this quiz.');
+        }
+    }
+
     $now = current_time('mysql');
     set_transient('nds_quiz_start_' . $student_id . '_' . $content_id, $now, 6 * HOUR_IN_SECONDS);
     wp_send_json_success(array('started_at' => $now));
@@ -1198,21 +1411,34 @@ add_action('wp_ajax_nds_portal_submit_assignment', function () {
     }
 
     global $wpdb;
-    $content = $wpdb->get_row($wpdb->prepare(
-        "SELECT id, module_id, course_id, title, due_date
-         FROM {$wpdb->prefix}nds_lecturer_content
-         WHERE id = %d
-           AND content_type = 'assignment'
-           AND is_visible = 1
-           AND status = 'published'
-           AND (access_start IS NULL OR access_start <= NOW())
-           AND (access_end IS NULL OR access_end >= NOW())
-         LIMIT 1",
-        $content_id
-    ), ARRAY_A);
+        $content = $wpdb->get_row($wpdb->prepare(
+                "SELECT lc.id, lc.module_id, lc.course_id, lc.title, lc.due_date, lc.access_grouping, lc.allowed_cohort_ids,
+                                cs.access_grouping AS section_access_grouping, cs.allowed_cohort_ids AS section_allowed_cohort_ids
+                 FROM {$wpdb->prefix}nds_lecturer_content lc
+                 LEFT JOIN {$wpdb->prefix}nds_course_sections cs ON cs.id = lc.section_id
+                 WHERE lc.id = %d
+                     AND lc.content_type = 'assignment'
+                     AND lc.is_visible = 1
+                     AND lc.status = 'published'
+                     AND (lc.access_start IS NULL OR lc.access_start <= NOW())
+                     AND (lc.access_end IS NULL OR lc.access_end >= NOW())
+                     AND (cs.id IS NULL OR cs.is_visible = 1)
+                     AND (cs.id IS NULL OR cs.access_start IS NULL OR cs.access_start <= NOW())
+                     AND (cs.id IS NULL OR cs.access_end IS NULL OR cs.access_end >= NOW())
+                 LIMIT 1",
+                $content_id
+        ), ARRAY_A);
 
     if (empty($content)) {
         wp_send_json_error('Assignment is not available anymore.');
+    }
+
+    $student_cohort_ids = nds_portal_get_student_cohort_ids($student_id);
+    if (!nds_portal_access_grouping_allows_student($content['access_grouping'] ?? 'all', $content['allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('This assignment is restricted to a different learner group.');
+    }
+    if (!nds_portal_access_grouping_allows_student($content['section_access_grouping'] ?? 'all', $content['section_allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('This assignment section is restricted to a different learner group.');
     }
 
     $module_id = (int) ($content['module_id'] ?? 0);
@@ -1368,6 +1594,83 @@ add_action('wp_ajax_nds_portal_submit_assignment', function () {
         'file_url' => $file_url,
         'file_name' => $file_name,
     ));
+});
+
+add_action('wp_ajax_nds_portal_track_content_view', function () {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+
+    $nonce = isset($_POST['nonce']) ? sanitize_text_field(wp_unslash($_POST['nonce'])) : '';
+    if ($nonce === '' || !wp_verify_nonce($nonce, 'nds_portal_nonce')) {
+        wp_send_json_error('Invalid request token.', 403);
+    }
+
+    $student_id = (int) nds_portal_get_current_student_id();
+    $content_id = isset($_POST['content_id']) ? (int) $_POST['content_id'] : 0;
+    if ($student_id <= 0 || $content_id <= 0) {
+        wp_send_json_error('Invalid request.');
+    }
+
+    $view_type = isset($_POST['view_type']) ? sanitize_key((string) wp_unslash($_POST['view_type'])) : 'open';
+    if (!in_array($view_type, array('open_link', 'download', 'open_quiz', 'open_assignment', 'open_material'), true)) {
+        $view_type = 'open';
+    }
+
+    global $wpdb;
+    $content = $wpdb->get_row($wpdb->prepare(
+        "SELECT id, module_id, course_id, access_grouping, allowed_cohort_ids
+         FROM {$wpdb->prefix}nds_lecturer_content
+         WHERE id = %d AND is_visible = 1 AND status = 'published'",
+        $content_id
+    ), ARRAY_A);
+
+    if (empty($content)) {
+        wp_send_json_error('Content unavailable.');
+    }
+
+    $student_cohort_ids = nds_portal_get_student_cohort_ids($student_id);
+    if (!nds_portal_access_grouping_allows_student($content['access_grouping'] ?? 'all', $content['allowed_cohort_ids'] ?? '', $student_cohort_ids)) {
+        wp_send_json_error('Content access denied.');
+    }
+
+    $table = nds_portal_ensure_content_views_table();
+    $client_ip = function_exists('nds_portal_get_client_ip') ? nds_portal_get_client_ip() : '';
+    $user_agent = isset($_SERVER['HTTP_USER_AGENT']) ? sanitize_text_field((string) wp_unslash($_SERVER['HTTP_USER_AGENT'])) : '';
+
+    $saved = $wpdb->insert(
+        $table,
+        array(
+            'content_id' => $content_id,
+            'student_id' => $student_id,
+            'module_id' => isset($content['module_id']) ? (int) $content['module_id'] : null,
+            'course_id' => isset($content['course_id']) ? (int) $content['course_id'] : null,
+            'view_type' => $view_type,
+            'source' => 'portal',
+            'viewed_at' => current_time('mysql'),
+            'ip_address' => $client_ip,
+            'user_agent' => $user_agent,
+        ),
+        array('%d', '%d', '%d', '%d', '%s', '%s', '%s', '%s', '%s')
+    );
+
+    if ($saved !== false) {
+        $wpdb->insert(
+            $wpdb->prefix . 'nds_student_activity_log',
+            array(
+                'student_id' => $student_id,
+                'actor_id' => get_current_user_id(),
+                'action' => 'Viewed content #' . $content_id,
+                'action_type' => 'content_view',
+                'new_values' => wp_json_encode(array('content_id' => $content_id, 'view_type' => $view_type)),
+                'ip_address' => $client_ip,
+                'user_agent' => $user_agent,
+            ),
+            array('%d', '%d', '%s', '%s', '%s', '%s', '%s')
+        );
+    }
+
+    wp_send_json_success(array('tracked' => $saved !== false));
 });
 
 add_action('wp_ajax_nds_portal_registration_action', function () {

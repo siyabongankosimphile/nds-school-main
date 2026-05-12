@@ -137,8 +137,136 @@ function nds_staff_portal_tab_url($tab)
     }
     return add_query_arg('tab', $tab, $base);
 }
-?>
 
+$tab_labels = array(
+    'overview' => 'Dashboard',
+    'timetable' => 'Calendar',
+    'classes' => 'My Classes',
+    'marks' => 'Grades',
+    'gradebook' => 'Gradebook',
+    'content' => 'Course Content',
+    'assessments' => 'Assessments',
+    'communication' => 'Communication',
+    'reports' => 'Reports',
+    'enrollment' => 'Enrollment',
+    'structure' => 'Course Structure',
+    'profile' => 'Profile',
+);
+
+$left_nav_items = array(
+    array('tab' => 'overview', 'icon' => 'fa-home', 'label' => 'Dashboard'),
+    array('tab' => 'content', 'icon' => 'fa-book-open', 'label' => 'My Courses'),
+    array('tab' => 'timetable', 'icon' => 'fa-calendar-alt', 'label' => 'Calendar'),
+    array('tab' => 'marks', 'icon' => 'fa-graduation-cap', 'label' => 'Grades'),
+    array('tab' => 'gradebook', 'icon' => 'fa-table', 'label' => 'Gradebook'),
+    array('tab' => 'assessments', 'icon' => 'fa-clipboard-check', 'label' => 'Assessments'),
+    array('tab' => 'communication', 'icon' => 'fa-comments', 'label' => 'Messages'),
+    array('tab' => 'reports', 'icon' => 'fa-chart-line', 'label' => 'Reports'),
+    array('tab' => 'structure', 'icon' => 'fa-sitemap', 'label' => 'Course Layout'),
+    array('tab' => 'profile', 'icon' => 'fa-user-cog', 'label' => 'Settings'),
+);
+
+$content_table = $wpdb->prefix . 'nds_lecturer_content';
+$recent_announcements = array();
+$upcoming_deadlines = array();
+$recent_content_activity = array();
+
+if (!empty($course_ids)) {
+    $course_placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
+
+    $recent_announcements = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT title, course_id, created_at
+             FROM {$content_table}
+             WHERE course_id IN ({$course_placeholders})
+               AND content_type = 'announcement'
+             ORDER BY created_at DESC
+             LIMIT 5",
+            $course_ids
+        ),
+        ARRAY_A
+    );
+
+    if (empty($recent_announcements)) {
+        $recent_announcements = $wpdb->get_results(
+            $wpdb->prepare(
+                "SELECT title, course_id, created_at
+                 FROM {$content_table}
+                 WHERE course_id IN ({$course_placeholders})
+                 ORDER BY created_at DESC
+                 LIMIT 5",
+                $course_ids
+            ),
+            ARRAY_A
+        );
+    }
+
+    $upcoming_deadlines = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT title, course_id, access_end
+             FROM {$content_table}
+             WHERE course_id IN ({$course_placeholders})
+               AND access_end IS NOT NULL
+               AND access_end <> ''
+               AND access_end >= %s
+             ORDER BY access_end ASC
+             LIMIT 6",
+            array_merge($course_ids, array(current_time('mysql')))
+        ),
+        ARRAY_A
+    );
+
+    $recent_content_activity = $wpdb->get_results(
+        $wpdb->prepare(
+            "SELECT title, content_type, COALESCE(updated_at, created_at) AS activity_at
+             FROM {$content_table}
+             WHERE course_id IN ({$course_placeholders})
+             ORDER BY activity_at DESC
+             LIMIT 6",
+            $course_ids
+        ),
+        ARRAY_A
+    );
+}
+
+$recent_courses = array_slice($courses_taught, 0, 6);
+$portal_title = $tab_labels[$current_tab] ?? 'Dashboard';
+$selected_course_id = isset($_GET['course_id']) ? (int) $_GET['course_id'] : 0;
+$selected_course = null;
+
+if ($selected_course_id > 0) {
+    foreach ($courses_taught as $course_row) {
+        if ((int) ($course_row['id'] ?? 0) === $selected_course_id) {
+            $selected_course = $course_row;
+            break;
+        }
+    }
+}
+
+$course_context_url = $selected_course
+    ? add_query_arg('course_id', (int) ($selected_course['id'] ?? 0), nds_staff_portal_tab_url('content'))
+    : '';
+
+$current_tab_url = $selected_course
+    ? add_query_arg('course_id', (int) ($selected_course['id'] ?? 0), nds_staff_portal_tab_url($current_tab))
+    : nds_staff_portal_tab_url($current_tab);
+
+$breadcrumbs = array(
+    array('label' => 'Home', 'url' => home_url()),
+    array('label' => 'Staff Portal', 'url' => nds_staff_portal_tab_url('overview')),
+);
+
+if ($selected_course && $current_tab !== 'content') {
+    $breadcrumbs[] = array('label' => 'Course Content', 'url' => $course_context_url);
+    $breadcrumbs[] = array('label' => (string) ($selected_course['name'] ?? 'Course'), 'url' => $course_context_url);
+    $breadcrumbs[] = array('label' => $portal_title, 'url' => '');
+} elseif ($selected_course && $current_tab === 'content') {
+    $breadcrumbs[] = array('label' => 'Course Content', 'url' => $course_context_url);
+    $breadcrumbs[] = array('label' => (string) ($selected_course['name'] ?? 'Course'), 'url' => '');
+} else {
+    $breadcrumbs[] = array('label' => $portal_title, 'url' => $current_tab === 'overview' ? '' : $current_tab_url);
+}
+?>
 <div class="nds-tailwind-wrapper bg-gray-50 min-h-screen nds-portal-offset nds-portal-theme" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
     <!-- Header -->
     <div class="bg-white shadow-sm border-b border-gray-200">
@@ -225,54 +353,54 @@ function nds_staff_portal_tab_url($tab)
         <div class="bg-white shadow-sm rounded-xl border border-gray-100 mb-6">
             <div class="border-b border-gray-200">
                 <nav class="flex -mb-px overflow-x-auto" aria-label="Tabs">
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('overview')); ?>" 
-                   class="<?php echo $current_tab === 'overview' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-home mr-2"></i>Overview
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('timetable')); ?>" 
-                   class="<?php echo $current_tab === 'timetable' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-calendar-alt mr-2"></i>Timetable
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('classes')); ?>" 
-                   class="<?php echo $current_tab === 'classes' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-chalkboard-teacher mr-2"></i>Classes
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('marks')); ?>" 
-                   class="<?php echo $current_tab === 'marks' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-graduation-cap mr-2"></i>Marks
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('gradebook')); ?>" 
-                   class="<?php echo $current_tab === 'gradebook' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-table mr-2"></i>Gradebook
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('content')); ?>" 
-                   class="<?php echo $current_tab === 'content' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-folder-open mr-2"></i>Content
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('assessments')); ?>" 
-                   class="<?php echo $current_tab === 'assessments' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-clipboard-check mr-2"></i>Assessments
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('communication')); ?>" 
-                   class="<?php echo $current_tab === 'communication' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-bullhorn mr-2"></i>Communication
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('reports')); ?>" 
-                   class="<?php echo $current_tab === 'reports' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-chart-line mr-2"></i>Reports
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('enrollment')); ?>" 
-                   class="<?php echo $current_tab === 'enrollment' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-user-plus mr-2"></i>Enrollment
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('structure')); ?>" 
-                   class="<?php echo $current_tab === 'structure' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-sitemap mr-2"></i>Structure
-                </a>
-                <a href="<?php echo esc_url(nds_staff_portal_tab_url('profile')); ?>" 
-                   class="<?php echo $current_tab === 'profile' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
-                    <i class="fas fa-user-cog mr-2"></i>Profile
-                </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('overview')); ?>" 
+                       class="<?php echo $current_tab === 'overview' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-home mr-2"></i>Overview
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('timetable')); ?>" 
+                       class="<?php echo $current_tab === 'timetable' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-calendar-alt mr-2"></i>Timetable
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('classes')); ?>" 
+                       class="<?php echo $current_tab === 'classes' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-chalkboard-teacher mr-2"></i>Classes
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('marks')); ?>" 
+                       class="<?php echo $current_tab === 'marks' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-graduation-cap mr-2"></i>Marks
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('gradebook')); ?>" 
+                       class="<?php echo $current_tab === 'gradebook' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-table mr-2"></i>Gradebook
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('content')); ?>" 
+                       class="<?php echo $current_tab === 'content' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-folder-open mr-2"></i>Content
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('assessments')); ?>" 
+                       class="<?php echo $current_tab === 'assessments' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-clipboard-check mr-2"></i>Assessments
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('communication')); ?>" 
+                       class="<?php echo $current_tab === 'communication' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-bullhorn mr-2"></i>Communication
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('reports')); ?>" 
+                       class="<?php echo $current_tab === 'reports' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-chart-line mr-2"></i>Reports
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('enrollment')); ?>" 
+                       class="<?php echo $current_tab === 'enrollment' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-user-plus mr-2"></i>Enrollment
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('structure')); ?>" 
+                       class="<?php echo $current_tab === 'structure' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-sitemap mr-2"></i>Structure
+                    </a>
+                    <a href="<?php echo esc_url(nds_staff_portal_tab_url('profile')); ?>" 
+                       class="<?php echo $current_tab === 'profile' ? 'border-blue-500 text-blue-600' : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'; ?> whitespace-nowrap py-4 px-6 border-b-2 font-medium text-sm flex items-center space-x-2 transition-colors">
+                        <i class="fas fa-user-cog mr-2"></i>Profile
+                    </a>
                 </nav>
             </div>
 

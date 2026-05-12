@@ -412,23 +412,65 @@ if ($student_id > 0) {
 
     $module_ids_for_feed = array_values(array_unique(array_map('intval', wp_list_pluck($learner_registered_modules, 'module_id'))));
     $course_ids_for_feed = array_values(array_unique(array_filter(array_map('intval', wp_list_pluck($learner_registered_modules, 'course_id')))));
+    $learner_cohort_ids = $wpdb->get_col($wpdb->prepare(
+        "SELECT cohort_id
+         FROM {$wpdb->prefix}nds_student_cohorts
+         WHERE student_id = %d
+           AND (status = 'active' OR status IS NULL)",
+        $student_id
+    ));
+    $learner_cohort_ids = array_values(array_unique(array_filter(array_map('intval', $learner_cohort_ids ?: array()), static function ($id) {
+        return $id > 0;
+    })));
+
     if (!empty($module_ids_for_feed)) {
         $module_placeholders = implode(',', array_fill(0, count($module_ids_for_feed), '%d'));
 
         $module_content_rows = $wpdb->get_results($wpdb->prepare(
             "SELECT lc.id, lc.module_id, lc.content_type, lc.title, lc.description,
                     lc.resource_url, lc.attachment_url, lc.due_date, lc.quiz_data, lc.created_at,
+                    lc.access_grouping, lc.allowed_cohort_ids,
+                    cs.access_grouping AS section_access_grouping,
+                    cs.allowed_cohort_ids AS section_allowed_cohort_ids,
                     m.name AS module_name
              FROM {$wpdb->prefix}nds_lecturer_content lc
              INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = lc.module_id
-                         WHERE lc.module_id IN ({$module_placeholders})
+             LEFT JOIN {$wpdb->prefix}nds_course_sections cs ON cs.id = lc.section_id
+             WHERE lc.module_id IN ({$module_placeholders})
                AND lc.is_visible = 1
                AND lc.status = 'published'
                AND (lc.access_start IS NULL OR lc.access_start <= NOW())
                AND (lc.access_end IS NULL OR lc.access_end >= NOW())
+               AND (cs.id IS NULL OR cs.is_visible = 1)
+               AND (cs.id IS NULL OR cs.access_start IS NULL OR cs.access_start <= NOW())
+               AND (cs.id IS NULL OR cs.access_end IS NULL OR cs.access_end >= NOW())
              ORDER BY lc.created_at DESC",
             $module_ids_for_feed
         ), ARRAY_A);
+
+        $module_content_rows = array_values(array_filter($module_content_rows, static function ($row) use ($learner_cohort_ids) {
+            $content_grouping = sanitize_key((string) ($row['access_grouping'] ?? 'all'));
+            if ($content_grouping === 'cohorts') {
+                $content_allowed = array_values(array_filter(array_map('intval', preg_split('/[^0-9]+/', (string) ($row['allowed_cohort_ids'] ?? ''))), static function ($id) {
+                    return $id > 0;
+                }));
+                if (empty($content_allowed) || empty(array_intersect($content_allowed, $learner_cohort_ids))) {
+                    return false;
+                }
+            }
+
+            $section_grouping = sanitize_key((string) ($row['section_access_grouping'] ?? 'all'));
+            if ($section_grouping === 'cohorts') {
+                $section_allowed = array_values(array_filter(array_map('intval', preg_split('/[^0-9]+/', (string) ($row['section_allowed_cohort_ids'] ?? ''))), static function ($id) {
+                    return $id > 0;
+                }));
+                if (empty($section_allowed) || empty(array_intersect($section_allowed, $learner_cohort_ids))) {
+                    return false;
+                }
+            }
+
+            return true;
+        }));
 
         foreach ($module_content_rows as $content_row) {
             $mid = (int) ($content_row['module_id'] ?? 0);
@@ -1359,6 +1401,44 @@ $unread_count = count($unread_notifications);
                                 }
                             }
 
+                            // NEW: Quiz intro page data
+                            $quiz_intro_data = array(
+                                'time_limit_minutes' => isset($selected_quiz_content['time_limit_minutes']) ? (int) $selected_quiz_content['time_limit_minutes'] : 0,
+                                'attempts_allowed' => isset($selected_quiz_content['attempts_allowed']) ? (int) $selected_quiz_content['attempts_allowed'] : 1,
+                                'shuffle_questions' => isset($selected_quiz_content['shuffle_questions']) ? (bool) $selected_quiz_content['shuffle_questions'] : false,
+                                'pass_percentage' => isset($selected_quiz_content['pass_percentage']) ? (float) $selected_quiz_content['pass_percentage'] : $selected_quiz_pass_threshold,
+                            );
+                            $question_order_indices = array();
+
+                            if (!empty($selected_quiz_questions)) {
+                                $prepared_questions = array();
+                                foreach ($selected_quiz_questions as $source_index => $question_item) {
+                                    if (!is_array($question_item)) {
+                                        continue;
+                                    }
+                                    $question_item['_source_index'] = (int) $source_index;
+                                    $prepared_questions[] = $question_item;
+                                }
+
+                                if ($quiz_intro_data['shuffle_questions']) {
+                                    shuffle($prepared_questions);
+                                }
+
+                                $selected_quiz_questions = array_values($prepared_questions);
+                                $question_order_indices = array_map(static function ($question_item) {
+                                    return isset($question_item['_source_index']) ? (int) $question_item['_source_index'] : 0;
+                                }, $selected_quiz_questions);
+                            }
+                            $quiz_attempts_completed = 0;
+                            $quiz_attempts_available = $quiz_intro_data['attempts_allowed'] > 0;
+                            $quiz_attempt_stats = array(
+                                'scored_count' => 0,
+                                'best_score' => null,
+                                'best_attempt_no' => null,
+                                'average_score' => null,
+                                'last_score' => null,
+                            );
+
                             if (!empty($selected_quiz_content) && function_exists('nds_portal_ensure_quiz_attempts_table')) {
                                 $quiz_attempts_table = nds_portal_ensure_quiz_attempts_table();
                                 $selected_quiz_attempts = $wpdb->get_results($wpdb->prepare(
@@ -1370,6 +1450,43 @@ $unread_count = count($unread_notifications);
                                     (int) $selected_quiz_content['id'],
                                     (int) $student_id
                                 ), ARRAY_A);
+
+                                // NEW: Count completed attempts to check if student can attempt again
+                                $quiz_attempts_completed = count($selected_quiz_attempts);
+                                $quiz_attempts_available = $quiz_intro_data['attempts_allowed'] <= 0 || $quiz_attempts_completed < $quiz_intro_data['attempts_allowed'];
+
+                                $scored_values = array();
+                                foreach ($selected_quiz_attempts as $attempt_row_for_stats) {
+                                    $score_val_for_stats = isset($attempt_row_for_stats['score_percent']) ? (float) $attempt_row_for_stats['score_percent'] : null;
+                                    $graded_questions_for_stats = (int) ($attempt_row_for_stats['graded_questions'] ?? 0);
+                                    if ($score_val_for_stats !== null && $graded_questions_for_stats > 0) {
+                                        $scored_values[] = array(
+                                            'attempt_no' => (int) ($attempt_row_for_stats['attempt_no'] ?? 0),
+                                            'score' => $score_val_for_stats,
+                                        );
+                                    }
+                                }
+
+                                if (!empty($scored_values)) {
+                                    $quiz_attempt_stats['scored_count'] = count($scored_values);
+                                    $quiz_attempt_stats['last_score'] = isset($scored_values[0]['score']) ? (float) $scored_values[0]['score'] : null;
+
+                                    $scores_only = array_map(function ($row) {
+                                        return (float) ($row['score'] ?? 0);
+                                    }, $scored_values);
+
+                                    $quiz_attempt_stats['average_score'] = array_sum($scores_only) / count($scores_only);
+
+                                    $best_row = $scored_values[0];
+                                    foreach ($scored_values as $score_row) {
+                                        if ((float) $score_row['score'] > (float) $best_row['score']) {
+                                            $best_row = $score_row;
+                                        }
+                                    }
+
+                                    $quiz_attempt_stats['best_score'] = (float) $best_row['score'];
+                                    $quiz_attempt_stats['best_attempt_no'] = (int) $best_row['attempt_no'];
+                                }
                             }
 
                             if (!empty($selected_assignment_content) && function_exists('nds_portal_ensure_assignment_submissions_table')) {
@@ -1396,17 +1513,144 @@ $unread_count = count($unread_notifications);
                                 <?php if (!empty($selected_quiz_content) && !empty($selected_quiz_questions)) : ?>
                                     <div class="bg-white border border-indigo-200 rounded-xl shadow-sm overflow-hidden" id="nds-quiz-attempt-panel">
                                         <div class="bg-indigo-600 px-6 py-5 text-white">
-                                            <div class="text-xs uppercase tracking-widest text-indigo-100 font-semibold mb-1">Quiz Attempt</div>
+                                            <div class="text-xs uppercase tracking-widest text-indigo-100 font-semibold mb-1">Quiz</div>
                                             <h3 class="text-xl font-semibold"><?php echo esc_html($selected_quiz_content['title'] ?? 'Quiz'); ?></h3>
                                             <?php if (!empty($selected_quiz_content['description'])) : ?>
                                                 <p class="text-sm text-indigo-100 mt-1"><?php echo esc_html($selected_quiz_content['description']); ?></p>
                                             <?php endif; ?>
                                         </div>
 
-                                        <form id="nds-quiz-attempt-form" class="p-6 space-y-5" data-pass-threshold="<?php echo esc_attr($selected_quiz_pass_threshold); ?>">
+                                        <!-- NEW: Quiz Introduction Page -->
+                                        <div id="nds-quiz-intro-section" class="p-6 space-y-5 border-t border-indigo-100">
+                                            <div class="bg-indigo-50 border border-indigo-200 rounded-lg p-5">
+                                                <h4 class="text-base font-semibold text-indigo-900 mb-4">Instructions</h4>
+                                                <?php
+                                                $quiz_instructions = isset($selected_quiz_content['instructions']) && !empty($selected_quiz_content['instructions'])
+                                                    ? $selected_quiz_content['instructions']
+                                                    : 'Please read the instructions carefully before starting the quiz.';
+                                                ?>
+                                                <div class="text-sm text-gray-700 whitespace-pre-wrap mb-4"><?php echo esc_html($quiz_instructions); ?></div>
+
+                                                <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mt-4 pt-4 border-t border-indigo-200">
+                                                    <div class="bg-white rounded-lg p-3">
+                                                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Questions</div>
+                                                        <div class="text-lg font-bold text-indigo-600"><?php echo count($selected_quiz_questions); ?></div>
+                                                    </div>
+
+                                                    <?php if ($quiz_intro_data['time_limit_minutes'] > 0) : ?>
+                                                        <div class="bg-white rounded-lg p-3">
+                                                            <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Time Limit</div>
+                                                            <div class="text-lg font-bold text-orange-600"><?php echo (int) $quiz_intro_data['time_limit_minutes']; ?> min</div>
+                                                        </div>
+                                                    <?php endif; ?>
+
+                                                    <div class="bg-white rounded-lg p-3">
+                                                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Pass Mark</div>
+                                                        <div class="text-lg font-bold text-green-600"><?php echo number_format($quiz_intro_data['pass_percentage'], 0); ?>%</div>
+                                                    </div>
+
+                                                    <div class="bg-white rounded-lg p-3">
+                                                        <div class="text-xs font-semibold text-gray-500 uppercase mb-1">Attempts</div>
+                                                        <div class="text-lg font-bold text-blue-600">
+                                                            <?php
+                                                            if ($quiz_intro_data['attempts_allowed'] <= 0) {
+                                                                echo 'Unlimited';
+                                                            } else {
+                                                                echo $quiz_attempts_completed . ' / ' . $quiz_intro_data['attempts_allowed'];
+                                                            }
+                                                            ?>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div class="mt-5 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                                                    <div class="flex items-start gap-2">
+                                                        <i class="fas fa-info-circle text-blue-600 mt-0.5 flex-shrink-0"></i>
+                                                        <div class="text-sm text-blue-900">
+                                                            <strong>Before you start:</strong>
+                                                            <ul class="list-disc list-inside mt-1 space-y-1 text-xs">
+                                                                <li>Make sure you have a stable internet connection</li>
+                                                                <li>Close any other applications or browser tabs</li>
+                                                                <li>Read all instructions carefully</li>
+                                                                <li>Once started, you cannot pause the quiz</li>
+                                                            </ul>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
+
+                                            <?php if ($quiz_attempts_available) : ?>
+                                                <div class="flex gap-3">
+                                                    <button type="button" id="nds-quiz-start-btn" class="inline-flex items-center px-5 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-200 font-medium">
+                                                        <i class="fas fa-play mr-2"></i> Start Quiz (Attempt <?php echo $quiz_attempts_completed + 1; ?>)
+                                                    </button>
+                                                    <a href="<?php echo esc_url($courses_tab_url); ?>" class="inline-flex items-center px-5 py-2 bg-white border border-gray-300 text-gray-700 rounded-lg hover:bg-gray-50 transition-colors duration-200">
+                                                        <i class="fas fa-arrow-left mr-2"></i> Back to courses
+                                                    </a>
+                                                </div>
+                                            <?php else : ?>
+                                                <div class="p-4 bg-red-50 border border-red-200 rounded-lg">
+                                                    <div class="flex items-center gap-2 text-red-900">
+                                                        <i class="fas fa-times-circle"></i>
+                                                        <span class="font-medium">You have used all available attempts for this quiz.</span>
+                                                    </div>
+                                                </div>
+                                            <?php endif; ?>
+                                            <div id="nds-quiz-intro-feedback" class="hidden rounded-lg border px-4 py-3 text-sm"></div>
+                                        </div>
+
+                                        <!-- Quiz Question Form (hidden until "Start" is clicked) -->
+                                        <form id="nds-quiz-attempt-form" class="p-6 space-y-5 hidden" data-pass-threshold="<?php echo esc_attr($selected_quiz_pass_threshold); ?>">
                                             <input type="hidden" name="action" value="nds_portal_submit_quiz_attempt">
                                             <input type="hidden" name="nonce" value="<?php echo esc_attr(wp_create_nonce('nds_portal_quiz_nonce')); ?>">
                                             <input type="hidden" name="content_id" value="<?php echo (int) $selected_quiz_content['id']; ?>">
+                                            <input type="hidden" name="question_order" value="<?php echo esc_attr(implode(',', $question_order_indices)); ?>">
+
+                                            <!-- NEW: Quiz Header During Attempt -->
+                                            <div class="sticky top-0 bg-white p-3 border-b border-indigo-100 -mx-6 -mt-6 mb-3 flex items-center justify-between z-10">
+                                                <div>
+                                                    <h4 class="font-semibold text-gray-800">Question <span id="nds-quiz-current-q" class="text-indigo-600">1</span> of <?php echo count($selected_quiz_questions); ?></h4>
+                                                </div>
+                                                <?php if ($quiz_intro_data['time_limit_minutes'] > 0) : ?>
+                                                    <div id="nds-quiz-timer" class="text-sm font-semibold px-3 py-1 rounded-full bg-indigo-100 text-indigo-700 transition-colors duration-300" data-time-limit="<?php echo (int) $quiz_intro_data['time_limit_minutes']; ?>">
+                                                        <i class="fas fa-clock mr-1"></i> <span id="nds-quiz-time-display">--:--</span>
+                                                    </div>
+                                                <?php endif; ?>
+                                            </div>
+
+                                            <!-- NEW: Question Navigation Panel -->
+                                            <div id="nds-quiz-nav-panel" class="grid grid-cols-1 lg:grid-cols-4 gap-3 mb-4 p-3 bg-gray-50 rounded-lg border border-gray-200">
+                                                <div class="lg:col-span-3">
+                                                    <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Questions</div>
+                                                    <div id="nds-quiz-nav-buttons" class="flex flex-wrap gap-2">
+                                                        <?php foreach ($selected_quiz_questions as $q_idx => $q) : ?>
+                                                            <button type="button" class="nds-quiz-nav-btn w-8 h-8 rounded border border-gray-300 bg-gray-100 text-gray-600 font-semibold text-xs hover:bg-indigo-100 hover:border-indigo-300 transition-colors" 
+                                                                    data-question-index="<?php echo (int) $q_idx; ?>" 
+                                                                    data-status="not-answered"
+                                                                    title="Question <?php echo $q_idx + 1; ?>">
+                                                                <?php echo $q_idx + 1; ?>
+                                                            </button>
+                                                        <?php endforeach; ?>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <div class="text-xs font-semibold text-gray-600 uppercase mb-2">Status Legend</div>
+                                                    <div class="space-y-1 text-xs">
+                                                        <div class="flex items-center gap-2">
+                                                            <div class="w-4 h-4 rounded border border-gray-300 bg-gray-100"></div>
+                                                            <span class="text-gray-600">Not answered</span>
+                                                        </div>
+                                                        <div class="flex items-center gap-2">
+                                                            <div class="w-4 h-4 rounded border border-indigo-300 bg-indigo-100 font-bold text-indigo-600 text-center leading-4">✓</div>
+                                                            <span class="text-gray-600">Answered</span>
+                                                        </div>
+                                                        <div class="flex items-center gap-2">
+                                                            <div class="w-4 h-4 rounded border border-amber-300 bg-amber-100 font-bold text-amber-600 text-center leading-4">⚑</div>
+                                                            <span class="text-gray-600">Flagged</span>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            </div>
 
                                             <?php foreach ($selected_quiz_questions as $q_index => $quiz_question) : ?>
                                                 <?php
@@ -1416,8 +1660,18 @@ $unread_count = count($unread_notifications);
                                                 }
                                                 $question_type = sanitize_key((string) ($quiz_question['type'] ?? 'multiple_choice'));
                                                 ?>
-                                                <div class="nds-quiz-question rounded-lg border border-gray-200 p-4" data-question-index="<?php echo (int) $q_index; ?>" data-question-type="<?php echo esc_attr($question_type); ?>">
-                                                    <div class="nds-quiz-question-title text-sm font-semibold text-gray-800 mb-3"><?php echo esc_html(($q_index + 1) . '. ' . $question_text); ?></div>
+                                                <div class="nds-quiz-question rounded-lg border border-gray-200 p-4 scroll-mt-24" data-question-index="<?php echo (int) $q_index; ?>" data-question-type="<?php echo esc_attr($question_type); ?>">
+                                                    <!-- NEW: Question header with flag button -->
+                                                    <div class="flex items-start justify-between mb-3">
+                                                        <div class="nds-quiz-question-title text-sm font-semibold text-gray-800">
+                                                            <span class="question-number"><?php echo $q_index + 1; ?></span>. <?php echo esc_html($question_text); ?>
+                                                        </div>
+                                                        <button type="button" class="nds-quiz-flag-btn flex-shrink-0 ml-2 p-1 text-gray-400 hover:text-amber-500 transition-colors" 
+                                                                data-question-index="<?php echo (int) $q_index; ?>"
+                                                                title="Flag this question for review">
+                                                            <i class="fas fa-flag text-sm"></i>
+                                                        </button>
+                                                    </div>
 
                                                     <?php if ($question_type === 'multiple_choice') : ?>
                                                         <?php
@@ -1441,6 +1695,8 @@ $unread_count = count($unread_notifications);
                                             <?php endforeach; ?>
 
                                             <div class="flex items-center justify-between gap-3">
+                                                <!-- NEW: Hidden field for flagged questions -->
+                                                <input type="hidden" name="flagged_questions" value="">
                                                 <button type="submit" class="inline-flex items-center px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors duration-200">
                                                     Submit Quiz
                                                 </button>
@@ -1457,21 +1713,70 @@ $unread_count = count($unread_notifications);
                                                     <span class="text-xs text-gray-500">Pass mark: <?php echo esc_html(rtrim(rtrim(number_format((float) $selected_quiz_pass_threshold, 2, '.', ''), '0'), '.')); ?>%</span>
                                                 </div>
 
-                                                <?php if (empty($selected_quiz_attempts)) : ?>
-                                                    <p class="text-sm text-gray-500">No attempts yet.</p>
-                                                <?php else : ?>
-                                                    <div class="space-y-2">
+                                                <div id="nds-quiz-attempt-summary" class="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+                                                    <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+                                                        <div class="text-[11px] uppercase font-semibold text-gray-500">Best</div>
+                                                        <div class="text-sm font-semibold text-emerald-700">
+                                                            <?php if ($quiz_attempt_stats['best_score'] !== null) : ?>
+                                                                <?php echo esc_html(number_format((float) $quiz_attempt_stats['best_score'], 2)); ?>%
+                                                            <?php else : ?>
+                                                                N/A
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+                                                        <div class="text-[11px] uppercase font-semibold text-gray-500">Average</div>
+                                                        <div class="text-sm font-semibold text-indigo-700">
+                                                            <?php if ($quiz_attempt_stats['average_score'] !== null) : ?>
+                                                                <?php echo esc_html(number_format((float) $quiz_attempt_stats['average_score'], 2)); ?>%
+                                                            <?php else : ?>
+                                                                N/A
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+                                                        <div class="text-[11px] uppercase font-semibold text-gray-500">Last</div>
+                                                        <div class="text-sm font-semibold text-blue-700">
+                                                            <?php if ($quiz_attempt_stats['last_score'] !== null) : ?>
+                                                                <?php echo esc_html(number_format((float) $quiz_attempt_stats['last_score'], 2)); ?>%
+                                                            <?php else : ?>
+                                                                N/A
+                                                            <?php endif; ?>
+                                                        </div>
+                                                    </div>
+                                                    <div class="rounded-md bg-white border border-gray-200 px-3 py-2">
+                                                        <div class="text-[11px] uppercase font-semibold text-gray-500">Attempts Used</div>
+                                                        <div id="nds-quiz-attempts-used" class="text-sm font-semibold text-gray-800">
+                                                            <?php
+                                                            if ($quiz_intro_data['attempts_allowed'] <= 0) {
+                                                                echo esc_html($quiz_attempts_completed . ' / Unlimited');
+                                                            } else {
+                                                                echo esc_html($quiz_attempts_completed . ' / ' . $quiz_intro_data['attempts_allowed']);
+                                                            }
+                                                            ?>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                <div id="nds-quiz-attempt-history-list" class="space-y-2">
+                                                    <?php if (empty($selected_quiz_attempts)) : ?>
+                                                        <p id="nds-quiz-empty-history" class="text-sm text-gray-500">No attempts yet.</p>
+                                                    <?php else : ?>
                                                         <?php foreach ($selected_quiz_attempts as $attempt_row) : ?>
                                                             <?php
                                                             $score_val = isset($attempt_row['score_percent']) ? (float) $attempt_row['score_percent'] : null;
                                                             $has_auto_score = $score_val !== null && (int) ($attempt_row['graded_questions'] ?? 0) > 0;
                                                             $is_pass = $has_auto_score && $score_val >= $selected_quiz_pass_threshold;
+                                                            $is_best_attempt = $has_auto_score && $quiz_attempt_stats['best_attempt_no'] !== null && (int) ($attempt_row['attempt_no'] ?? 0) === (int) $quiz_attempt_stats['best_attempt_no'];
                                                             ?>
                                                             <div class="flex items-center justify-between rounded-md bg-white border border-gray-200 px-3 py-2">
                                                                 <div class="text-sm text-gray-700">
                                                                     <span class="font-medium">Attempt #<?php echo (int) ($attempt_row['attempt_no'] ?? 0); ?></span>
                                                                     <span class="text-gray-400 mx-1">•</span>
                                                                     <span><?php echo esc_html(date_i18n('j M Y H:i', strtotime((string) ($attempt_row['submitted_at'] ?? 'now')))); ?></span>
+                                                                    <?php if ($is_best_attempt) : ?>
+                                                                        <span class="ml-2 text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Best</span>
+                                                                    <?php endif; ?>
                                                                 </div>
                                                                 <div class="flex items-center gap-2">
                                                                     <?php if ($has_auto_score) : ?>
@@ -1485,8 +1790,8 @@ $unread_count = count($unread_notifications);
                                                                 </div>
                                                             </div>
                                                         <?php endforeach; ?>
-                                                    </div>
-                                                <?php endif; ?>
+                                                    <?php endif; ?>
+                                                </div>
                                             </div>
                                         </div>
                                     </div>
@@ -1511,12 +1816,12 @@ $unread_count = count($unread_notifications);
 
                                             <div class="flex flex-wrap items-center gap-3">
                                                 <?php if (!empty($selected_assignment_content['attachment_url'])) : ?>
-                                                    <a href="<?php echo esc_url($selected_assignment_content['attachment_url']); ?>" target="_blank" rel="noopener" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors duration-200">
+                                                    <a href="<?php echo esc_url($selected_assignment_content['attachment_url']); ?>" target="_blank" rel="noopener" class="inline-flex items-center px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition-colors duration-200 nds-track-content-view" data-content-id="<?php echo (int) ($selected_assignment_content['id'] ?? 0); ?>" data-view-type="download">
                                                         <i class="fas fa-download mr-2"></i> View uploaded file
                                                     </a>
                                                 <?php endif; ?>
                                                 <?php if (!empty($selected_assignment_content['resource_url'])) : ?>
-                                                    <a href="<?php echo esc_url($selected_assignment_content['resource_url']); ?>" target="_blank" rel="noopener" class="inline-flex items-center px-4 py-2 bg-white border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 transition-colors duration-200">
+                                                    <a href="<?php echo esc_url($selected_assignment_content['resource_url']); ?>" target="_blank" rel="noopener" class="inline-flex items-center px-4 py-2 bg-white border border-orange-300 text-orange-700 rounded-lg hover:bg-orange-50 transition-colors duration-200 nds-track-content-view" data-content-id="<?php echo (int) ($selected_assignment_content['id'] ?? 0); ?>" data-view-type="open_link">
                                                         <i class="fas fa-link mr-2"></i> Open reference link
                                                     </a>
                                                 <?php endif; ?>
@@ -1674,7 +1979,7 @@ $unread_count = count($unread_notifications);
                                                                             home_url('/portal/')
                                                                         );
                                                                         ?>
-                                                                        <a href="<?php echo esc_url($open_quiz_url); ?>" class="text-indigo-600 hover:underline font-medium">Open quiz</a>
+                                                                        <a href="<?php echo esc_url($open_quiz_url); ?>" class="text-indigo-600 hover:underline font-medium nds-track-content-view" data-content-id="<?php echo (int) ($content_item['id'] ?? 0); ?>" data-view-type="open_quiz">Open quiz</a>
                                                                     <?php endif; ?>
                                                                     <?php if ($ctype === 'assignment') : ?>
                                                                         <?php
@@ -1687,13 +1992,13 @@ $unread_count = count($unread_notifications);
                                                                             home_url('/portal/')
                                                                         );
                                                                         ?>
-                                                                        <a href="<?php echo esc_url($open_assignment_url); ?>" class="text-orange-600 hover:underline font-medium">Open assignment</a>
+                                                                        <a href="<?php echo esc_url($open_assignment_url); ?>" class="text-orange-600 hover:underline font-medium nds-track-content-view" data-content-id="<?php echo (int) ($content_item['id'] ?? 0); ?>" data-view-type="open_assignment">Open assignment</a>
                                                                     <?php endif; ?>
                                                                     <?php if (!empty($content_item['resource_url'])) : ?>
-                                                                        <a href="<?php echo esc_url($content_item['resource_url']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Open link</a>
+                                                                        <a href="<?php echo esc_url($content_item['resource_url']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium nds-track-content-view" data-content-id="<?php echo (int) ($content_item['id'] ?? 0); ?>" data-view-type="open_link">Open link</a>
                                                                     <?php endif; ?>
                                                                     <?php if (!empty($content_item['attachment_url'])) : ?>
-                                                                        <a href="<?php echo esc_url($content_item['attachment_url']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium">Download</a>
+                                                                        <a href="<?php echo esc_url($content_item['attachment_url']); ?>" target="_blank" rel="noopener" class="text-blue-600 hover:underline font-medium nds-track-content-view" data-content-id="<?php echo (int) ($content_item['id'] ?? 0); ?>" data-view-type="download">Download</a>
                                                                     <?php endif; ?>
                                                                 </div>
                                                             </div>
@@ -2124,11 +2429,17 @@ document.addEventListener('DOMContentLoaded', function() {
     const quizAttemptForm = document.getElementById('nds-quiz-attempt-form');
     const quizAttemptFeedback = document.getElementById('nds-quiz-attempt-feedback');
     const quizReviewPanel = document.getElementById('nds-quiz-review');
+    const quizIntroFeedback = document.getElementById('nds-quiz-intro-feedback');
+    const quizAttemptHistoryList = document.getElementById('nds-quiz-attempt-history-list');
+    const quizAttemptSummaryPanel = document.getElementById('nds-quiz-attempt-summary');
+    const quizAttemptsUsedLabel = document.getElementById('nds-quiz-attempts-used');
     const assignmentSubmitForm = document.getElementById('nds-assignment-submit-form');
     const assignmentSubmitFeedback = document.getElementById('nds-assignment-submit-feedback');
     const assignmentHistoryList = document.getElementById('nds-assignment-submission-history-list');
     const assignmentEmptyHistory = document.getElementById('nds-assignment-empty-history');
     const assignmentReviewPanel = document.getElementById('nds-assignment-review');
+    const quizAttemptsAllowed = <?php echo isset($quiz_intro_data['attempts_allowed']) ? (int) $quiz_intro_data['attempts_allowed'] : 0; ?>;
+    const quizInitialAttempts = <?php echo wp_json_encode(isset($selected_quiz_attempts) ? $selected_quiz_attempts : array()); ?>;
 
     function ndsEscapeHtml(value) {
         return String(value || '')
@@ -2137,6 +2448,205 @@ document.addEventListener('DOMContentLoaded', function() {
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
+    }
+
+    function ndsTrackContentView(contentId, viewType) {
+        const cid = parseInt(contentId || 0, 10);
+        if (!cid) {
+            return;
+        }
+
+        const payload = new URLSearchParams();
+        payload.append('action', 'nds_portal_track_content_view');
+        payload.append('nonce', '<?php echo esc_js(wp_create_nonce('nds_portal_nonce')); ?>');
+        payload.append('content_id', String(cid));
+        payload.append('view_type', String(viewType || 'open'));
+
+        fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+            body: payload.toString(),
+            keepalive: true
+        }).catch(function () {});
+    }
+
+    document.querySelectorAll('.nds-track-content-view').forEach(function (link) {
+        link.addEventListener('click', function () {
+            ndsTrackContentView(link.getAttribute('data-content-id'), link.getAttribute('data-view-type'));
+        });
+    });
+
+    function ndsFormatPercent(value) {
+        const num = parseFloat(value);
+        if (Number.isNaN(num)) {
+            return 'N/A';
+        }
+        return num.toFixed(2) + '%';
+    }
+
+    function ndsReadAjaxMessage(payload, fallback) {
+        if (!payload) {
+            return fallback;
+        }
+
+        if (typeof payload === 'string') {
+            return payload;
+        }
+
+        if (typeof payload === 'object') {
+            if (typeof payload.message === 'string' && payload.message.trim() !== '') {
+                return payload.message;
+            }
+            if (typeof payload.data === 'string' && payload.data.trim() !== '') {
+                return payload.data;
+            }
+            if (payload.data && typeof payload.data === 'object' && typeof payload.data.message === 'string') {
+                return payload.data.message;
+            }
+        }
+
+        return fallback;
+    }
+
+    function ndsShowQuizIntroNotice(message, isError) {
+        if (!quizIntroFeedback) {
+            return;
+        }
+
+        quizIntroFeedback.className = 'rounded-lg border px-4 py-3 text-sm ' + (isError ? 'border-rose-200 bg-rose-50 text-rose-800' : 'border-emerald-200 bg-emerald-50 text-emerald-800');
+        quizIntroFeedback.textContent = message;
+        quizIntroFeedback.classList.remove('hidden');
+    }
+
+    function ndsShowQuizAttemptNotice(message, isError) {
+        if (!quizAttemptFeedback) {
+            return;
+        }
+
+        quizAttemptFeedback.className = 'text-sm ' + (isError ? 'text-rose-700 font-medium' : 'text-emerald-700 font-medium');
+        quizAttemptFeedback.textContent = message;
+    }
+
+    function ndsNormalizeAttemptHistoryRow(raw) {
+        return {
+            attempt_no: parseInt(raw.attempt_no || 0, 10),
+            total_questions: parseInt(raw.total_questions || 0, 10),
+            graded_questions: parseInt(raw.graded_questions || 0, 10),
+            correct_answers: parseInt(raw.correct_answers || 0, 10),
+            score_percent: raw.score_percent === null || raw.score_percent === undefined || raw.score_percent === '' ? null : parseFloat(raw.score_percent),
+            submitted_at: raw.submitted_at || ''
+        };
+    }
+
+    function ndsGetQuizStats(attempts) {
+        const scored = attempts.filter(function (attempt) {
+            return attempt.score_percent !== null && attempt.graded_questions > 0;
+        });
+
+        let best = null;
+        let bestAttemptNo = null;
+        let average = null;
+        let last = null;
+
+        if (scored.length > 0) {
+            last = scored[0].score_percent;
+            let sum = 0;
+            scored.forEach(function (attempt) {
+                sum += attempt.score_percent;
+                if (best === null || attempt.score_percent > best) {
+                    best = attempt.score_percent;
+                    bestAttemptNo = attempt.attempt_no;
+                }
+            });
+            average = sum / scored.length;
+        }
+
+        return {
+            best: best,
+            bestAttemptNo: bestAttemptNo,
+            average: average,
+            last: last
+        };
+    }
+
+    const quizAttemptsState = Array.isArray(quizInitialAttempts)
+        ? quizInitialAttempts.map(ndsNormalizeAttemptHistoryRow)
+        : [];
+
+    function renderQuizAttemptSummary() {
+        if (!quizAttemptSummaryPanel) {
+            return;
+        }
+
+        const stats = ndsGetQuizStats(quizAttemptsState);
+        const summaryCards = quizAttemptSummaryPanel.querySelectorAll('div.rounded-md.bg-white');
+        if (summaryCards.length >= 4) {
+            summaryCards[0].querySelector('div.text-sm').textContent = ndsFormatPercent(stats.best);
+            summaryCards[1].querySelector('div.text-sm').textContent = ndsFormatPercent(stats.average);
+            summaryCards[2].querySelector('div.text-sm').textContent = ndsFormatPercent(stats.last);
+        }
+
+        if (quizAttemptsUsedLabel) {
+            const attemptsUsed = quizAttemptsState.length;
+            if (quizAttemptsAllowed <= 0) {
+                quizAttemptsUsedLabel.textContent = attemptsUsed + ' / Unlimited';
+            } else {
+                quizAttemptsUsedLabel.textContent = attemptsUsed + ' / ' + quizAttemptsAllowed;
+            }
+        }
+    }
+
+    function renderQuizAttemptEntry(attemptRow) {
+        const hasAutoScore = attemptRow.score_percent !== null && attemptRow.graded_questions > 0;
+        const thresholdRaw = quizAttemptForm ? quizAttemptForm.getAttribute('data-pass-threshold') : null;
+        const threshold = thresholdRaw ? parseFloat(thresholdRaw) : 50;
+        const isPass = hasAutoScore && attemptRow.score_percent >= threshold;
+        const stats = ndsGetQuizStats(quizAttemptsState);
+        const isBest = hasAutoScore && stats.bestAttemptNo !== null && attemptRow.attempt_no === stats.bestAttemptNo;
+
+        const row = document.createElement('div');
+        row.className = 'flex items-center justify-between rounded-md bg-white border border-gray-200 px-3 py-2';
+        row.innerHTML = ''
+            + '<div class="text-sm text-gray-700">'
+            + '  <span class="font-medium">Attempt #' + ndsEscapeHtml(attemptRow.attempt_no) + '</span>'
+            + '  <span class="text-gray-400 mx-1">•</span>'
+            + '  <span>' + ndsEscapeHtml(attemptRow.submitted_at || 'Just now') + '</span>'
+            + (isBest ? '  <span class="ml-2 text-[11px] font-semibold px-2 py-0.5 rounded bg-emerald-100 text-emerald-700">Best</span>' : '')
+            + '</div>'
+            + '<div class="flex items-center gap-2">'
+            + (hasAutoScore
+                ? '  <span class="text-sm font-semibold text-gray-800">' + ndsFormatPercent(attemptRow.score_percent) + '</span>'
+                    + '  <span class="text-[11px] font-semibold px-2 py-1 rounded ' + (isPass ? 'bg-emerald-100 text-emerald-700' : 'bg-rose-100 text-rose-700') + '">' + (isPass ? 'Pass' : 'Fail') + '</span>'
+                : '  <span class="text-[11px] font-semibold px-2 py-1 rounded bg-amber-100 text-amber-700">Pending review</span>')
+            + '</div>';
+
+        return row;
+    }
+
+    function renderQuizAttemptHistoryList() {
+        if (!quizAttemptHistoryList) {
+            return;
+        }
+
+        quizAttemptHistoryList.innerHTML = '';
+        if (quizAttemptsState.length === 0) {
+            const empty = document.createElement('p');
+            empty.id = 'nds-quiz-empty-history';
+            empty.className = 'text-sm text-gray-500';
+            empty.textContent = 'No attempts yet.';
+            quizAttemptHistoryList.appendChild(empty);
+            return;
+        }
+
+        quizAttemptsState.forEach(function (attemptRow) {
+            quizAttemptHistoryList.appendChild(renderQuizAttemptEntry(attemptRow));
+        });
+    }
+
+    if (quizAttemptHistoryList) {
+        renderQuizAttemptSummary();
+        renderQuizAttemptHistoryList();
     }
 
     if (assignmentSubmitForm) {
@@ -2251,23 +2761,252 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     if (quizAttemptForm) {
-        // Notify the server that the student has opened the quiz so we can record started_at + IP.
-        (function () {
-            try {
-                const startPayload = new URLSearchParams();
-                startPayload.append('action', 'nds_portal_start_quiz_attempt');
-                const nonceField = quizAttemptForm.querySelector('input[name="nonce"]');
-                const contentField = quizAttemptForm.querySelector('input[name="content_id"]');
-                if (nonceField) startPayload.append('nonce', nonceField.value);
-                if (contentField) startPayload.append('content_id', contentField.value);
-                fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
-                    method: 'POST',
-                    credentials: 'same-origin',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: startPayload.toString()
-                }).catch(function () {});
-            } catch (e) {}
-        })();
+        // NEW: Quiz Navigation and Flagging System
+        const flaggedQuestions = new Set();
+        const questionElements = quizAttemptForm.querySelectorAll('.nds-quiz-question');
+        const navBtns = document.querySelectorAll('.nds-quiz-nav-btn');
+        const navPanel = document.getElementById('nds-quiz-nav-panel');
+        const flaggedQuestionsInput = quizAttemptForm.querySelector('input[name="flagged_questions"]');
+
+        // NEW: Flag button handler
+        document.querySelectorAll('.nds-quiz-flag-btn').forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                const qIndex = parseInt(btn.getAttribute('data-question-index'));
+                const qBlock = quizAttemptForm.querySelector('.nds-quiz-question[data-question-index="' + qIndex + '"]');
+                const navBtn = document.querySelector('.nds-quiz-nav-btn[data-question-index="' + qIndex + '"]');
+
+                if (flaggedQuestions.has(qIndex)) {
+                    // Unflag
+                    flaggedQuestions.delete(qIndex);
+                    btn.classList.remove('text-amber-500');
+                    btn.classList.add('text-gray-400');
+                    if (qBlock) {
+                        qBlock.classList.remove('border-amber-300', 'bg-amber-50');
+                        qBlock.classList.add('border-gray-200');
+                    }
+                    if (navBtn) {
+                        navBtn.classList.remove('border-amber-300', 'bg-amber-100', 'text-amber-600');
+                        navBtn.classList.add('border-gray-300', 'bg-gray-100', 'text-gray-600');
+                        navBtn.setAttribute('data-status', 'answered');
+                    }
+                } else {
+                    // Flag
+                    flaggedQuestions.add(qIndex);
+                    btn.classList.remove('text-gray-400');
+                    btn.classList.add('text-amber-500');
+                    if (qBlock) {
+                        qBlock.classList.remove('border-gray-200');
+                        qBlock.classList.add('border-amber-300', 'bg-amber-50');
+                    }
+                    if (navBtn) {
+                        navBtn.classList.remove('border-gray-300', 'bg-gray-100', 'text-gray-600', 'border-indigo-300', 'bg-indigo-100', 'text-indigo-600');
+                        navBtn.classList.add('border-amber-300', 'bg-amber-100', 'text-amber-600');
+                        navBtn.setAttribute('data-status', 'flagged');
+                    }
+                }
+
+                // Update hidden input with flagged questions
+                if (flaggedQuestionsInput) {
+                    flaggedQuestionsInput.value = Array.from(flaggedQuestions).join(',');
+                }
+            });
+        });
+
+        // NEW: Navigation button handler (jump to question)
+        navBtns.forEach(function (btn) {
+            btn.addEventListener('click', function (e) {
+                e.preventDefault();
+                const qIndex = parseInt(btn.getAttribute('data-question-index'));
+                const qBlock = quizAttemptForm.querySelector('.nds-quiz-question[data-question-index="' + qIndex + '"]');
+                if (qBlock) {
+                    qBlock.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                }
+            });
+        });
+
+        // NEW: Track question answer changes to update navigation status
+        quizAttemptForm.addEventListener('change', function (e) {
+            if (e.target.matches('input[type="radio"], textarea')) {
+                const qBlock = e.target.closest('.nds-quiz-question');
+                if (qBlock) {
+                    const qIndex = parseInt(qBlock.getAttribute('data-question-index'));
+                    const navBtn = document.querySelector('.nds-quiz-nav-btn[data-question-index="' + qIndex + '"]');
+                    const hasAnswer = qBlock.querySelector('input[type="radio"]:checked') || (qBlock.querySelector('textarea') && qBlock.querySelector('textarea').value.trim() !== '');
+
+                    if (navBtn && !flaggedQuestions.has(qIndex)) {
+                        if (hasAnswer) {
+                            navBtn.classList.remove('border-gray-300', 'bg-gray-100', 'text-gray-600');
+                            navBtn.classList.add('border-indigo-300', 'bg-indigo-100', 'text-indigo-600');
+                            navBtn.innerHTML = '✓';
+                            navBtn.setAttribute('data-status', 'answered');
+                        } else {
+                            navBtn.classList.remove('border-indigo-300', 'bg-indigo-100', 'text-indigo-600');
+                            navBtn.classList.add('border-gray-300', 'bg-gray-100', 'text-gray-600');
+                            navBtn.innerHTML = qIndex + 1;
+                            navBtn.setAttribute('data-status', 'not-answered');
+                        }
+                    } else if (navBtn && flaggedQuestions.has(qIndex)) {
+                        navBtn.innerHTML = '⚑';
+                    }
+                }
+            }
+        });
+
+        // NEW: Initialize nav button display
+        questionElements.forEach(function (qBlock) {
+            const qIndex = parseInt(qBlock.getAttribute('data-question-index'));
+            const navBtn = document.querySelector('.nds-quiz-nav-btn[data-question-index="' + qIndex + '"]');
+            const qType = qBlock.getAttribute('data-question-type');
+            let hasAnswer = false;
+
+            if (qType === 'multiple_choice') {
+                hasAnswer = !!qBlock.querySelector('input[type="radio"]:checked');
+            } else {
+                const textArea = qBlock.querySelector('textarea');
+                hasAnswer = textArea && textArea.value.trim() !== '';
+            }
+
+            if (navBtn && hasAnswer && !flaggedQuestions.has(qIndex)) {
+                navBtn.classList.remove('border-gray-300', 'bg-gray-100', 'text-gray-600');
+                navBtn.classList.add('border-indigo-300', 'bg-indigo-100', 'text-indigo-600');
+                navBtn.innerHTML = '✓';
+                navBtn.setAttribute('data-status', 'answered');
+            }
+        });
+
+        // NEW: Timer management for quiz attempt
+        let quizTimerInterval = null;
+        let quizStartTime = null;
+        let quizTimeLimit = 0;
+
+        function formatTimeRemaining(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return (mins < 10 ? '0' : '') + mins + ':' + (secs < 10 ? '0' : '') + secs;
+        }
+
+        function updateQuizTimer() {
+            if (!quizStartTime || quizTimeLimit === 0) return;
+            
+            const now = Math.floor(Date.now() / 1000);
+            const elapsed = now - quizStartTime;
+            const remaining = Math.max(0, quizTimeLimit - elapsed);
+            
+            const timerDisplay = document.getElementById('nds-quiz-time-display');
+            const timerContainer = document.getElementById('nds-quiz-timer');
+            
+            if (!timerDisplay || !timerContainer) return;
+            
+            timerDisplay.textContent = formatTimeRemaining(remaining);
+            
+            // Update color warnings
+            timerContainer.classList.remove('bg-indigo-100', 'text-indigo-700', 'bg-amber-100', 'text-amber-700', 'bg-red-100', 'text-red-700');
+            
+            if (remaining <= 60) {
+                // Red: < 1 minute
+                timerContainer.classList.add('bg-red-100', 'text-red-700');
+            } else if (remaining <= 300) {
+                // Amber: < 5 minutes
+                timerContainer.classList.add('bg-amber-100', 'text-amber-700');
+            } else {
+                // Default indigo: > 5 minutes
+                timerContainer.classList.add('bg-indigo-100', 'text-indigo-700');
+            }
+            
+            // Auto-submit when time expires
+            if (remaining <= 0) {
+                clearInterval(quizTimerInterval);
+                
+                // Show confirmation dialog
+                const confirmSubmit = confirm('Time has expired. Your quiz will be automatically submitted now.');
+                if (confirmSubmit) {
+                    quizAttemptForm.submit();
+                }
+            }
+        }
+
+        function startQuizTimer(timeLimitMinutes) {
+            quizTimeLimit = timeLimitMinutes * 60; // Convert to seconds
+            quizStartTime = Math.floor(Date.now() / 1000);
+            
+            // Update immediately
+            updateQuizTimer();
+            
+            // Update every second
+            quizTimerInterval = setInterval(updateQuizTimer, 1000);
+        }
+
+        // NEW: Handle "Start Quiz" button to reveal questions form
+        const startBtn = document.getElementById('nds-quiz-start-btn');
+        const introSection = document.getElementById('nds-quiz-intro-section');
+        if (startBtn && introSection) {
+            startBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+
+                if (quizIntroFeedback) {
+                    quizIntroFeedback.classList.add('hidden');
+                }
+
+                startBtn.disabled = true;
+                startBtn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i> Starting...';
+
+                try {
+                    const startPayload = new URLSearchParams();
+                    startPayload.append('action', 'nds_portal_start_quiz_attempt');
+                    const nonceField = quizAttemptForm.querySelector('input[name="nonce"]');
+                    const contentField = quizAttemptForm.querySelector('input[name="content_id"]');
+                    if (nonceField) startPayload.append('nonce', nonceField.value);
+                    if (contentField) startPayload.append('content_id', contentField.value);
+
+                    fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
+                        method: 'POST',
+                        credentials: 'same-origin',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: startPayload.toString()
+                    })
+                    .then(function (response) { return response.json(); })
+                    .then(function (json) {
+                        if (!json || !json.success) {
+                            const rawMessage = ndsReadAjaxMessage(json ? json.data : null, 'This quiz cannot be started right now.');
+                            let friendlyMessage = rawMessage;
+                            const lowered = String(rawMessage).toLowerCase();
+                            if (lowered.indexOf('maximum number of attempts') !== -1) {
+                                friendlyMessage = 'You have used all available attempts for this quiz. Please review your history or contact your lecturer if you think this is incorrect.';
+                            }
+                            ndsShowQuizIntroNotice(friendlyMessage + ' You can go back to attempt history and review your previous submissions.', true);
+                            return;
+                        }
+
+                        introSection.classList.add('hidden');
+                        quizAttemptForm.classList.remove('hidden');
+
+                        // Get time limit from timer element if it exists
+                        const timerElement = document.getElementById('nds-quiz-timer');
+                        if (timerElement && timerElement.hasAttribute('data-time-limit')) {
+                            const timeLimit = parseInt(timerElement.getAttribute('data-time-limit'), 10);
+                            if (timeLimit > 0) {
+                                startQuizTimer(timeLimit);
+                            }
+                        }
+                    })
+                    .catch(function () {
+                        ndsShowQuizIntroNotice('We could not start the quiz due to a network error. Please try again.', true);
+                    })
+                    .finally(function () {
+                        startBtn.disabled = false;
+                        startBtn.innerHTML = '<i class="fas fa-play mr-2"></i> Start Quiz (Attempt <?php echo $quiz_attempts_completed + 1; ?>)';
+                    });
+                } catch (e) {}
+            });
+        }
+
+        // Clean up timer on page unload
+        window.addEventListener('beforeunload', function() {
+            if (quizTimerInterval) {
+                clearInterval(quizTimerInterval);
+            }
+        });
 
         function buildQuizReviewHtml(attemptData) {
             const hasAutoScore = attemptData.score_percent !== null && attemptData.score_percent !== undefined && attemptData.graded_questions > 0;
@@ -2275,9 +3014,31 @@ document.addEventListener('DOMContentLoaded', function() {
             const statusClass = attemptData.passed === true
                 ? 'bg-emerald-100 text-emerald-700'
                 : (attemptData.passed === false ? 'bg-rose-100 text-rose-700' : 'bg-amber-100 text-amber-700');
+            const startedAt = attemptData.started_at ? String(attemptData.started_at) : '';
+            const submittedAt = attemptData.submitted_at ? String(attemptData.submitted_at) : '';
+
+            function getAttemptDurationText(startRaw, endRaw) {
+                if (!startRaw || !endRaw) {
+                    return 'Not available';
+                }
+                const start = new Date(startRaw.replace(' ', 'T'));
+                const end = new Date(endRaw.replace(' ', 'T'));
+                if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+                    return 'Not available';
+                }
+                const seconds = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 1000));
+                const mins = Math.floor(seconds / 60);
+                const remSecs = seconds % 60;
+                return mins + 'm ' + remSecs + 's';
+            }
+
+            // NEW: Parse flagged questions
+            const flaggedQuestionsStr = attemptData.flagged_questions || '';
+            const flaggedSet = flaggedQuestionsStr !== '' ? new Set(flaggedQuestionsStr.split(',').map(s => parseInt(s))) : new Set();
 
             const reviewRows = Array.isArray(attemptData.review) ? attemptData.review : [];
             let answerRows = '';
+            let flaggedRows = '';
 
             if (reviewRows.length > 0) {
                 reviewRows.forEach(function (row, i) {
@@ -2301,10 +3062,13 @@ document.addEventListener('DOMContentLoaded', function() {
                         ? '<strong>' + ndsEscapeHtml(row.correct_answer || '') + '.</strong> ' + ndsEscapeHtml(row.correct_answer_text || '')
                         : ndsEscapeHtml(row.correct_answer || '');
 
+                    const isFlagged = flaggedSet.has(i);
+                    const flagBadge = isFlagged ? '<span class="text-[11px] font-semibold px-2 py-0.5 rounded bg-amber-100 text-amber-700 ml-1"><i class="fas fa-flag mr-1"></i>Flagged</span>' : '';
+
                     answerRows += '<div class="rounded-md border ' + rowBorder + ' p-3">'
                         + '<div class="flex items-start justify-between gap-2 mb-2">'
                         +   '<div class="text-xs font-semibold text-indigo-900">Q' + (i + 1) + '. ' + ndsEscapeHtml(row.question || '') + '</div>'
-                        +   badgeHtml
+                        +   '<div>' + badgeHtml + flagBadge + '</div>'
                         + '</div>'
                         + '<div class="text-xs text-gray-500">Your answer</div>'
                         + '<div class="text-sm text-gray-800 mb-2 whitespace-pre-wrap">' + studentAnsDisplay + '</div>'
@@ -2314,7 +3078,7 @@ document.addEventListener('DOMContentLoaded', function() {
             } else {
                 // Fallback: show only student's own answers (legacy path)
                 const questionBlocks = quizAttemptForm.querySelectorAll('.nds-quiz-question');
-                questionBlocks.forEach(function (block) {
+                questionBlocks.forEach(function (block, i) {
                     const titleEl = block.querySelector('.nds-quiz-question-title');
                     const title = titleEl ? titleEl.textContent.trim() : 'Question';
                     const type = block.getAttribute('data-question-type') || 'multiple_choice';
@@ -2331,14 +3095,30 @@ document.addEventListener('DOMContentLoaded', function() {
                             answerText = textArea.value.trim();
                         }
                     }
+                    const isFlagged = flaggedSet.has(i);
+                    const flagBadge = isFlagged ? ' <strong style="color: #d97706;">⚑ Flagged</strong>' : '';
                     answerRows += '<div class="bg-white border border-indigo-100 rounded-md p-3">'
-                        + '<div class="text-xs font-semibold text-indigo-900 mb-1">' + ndsEscapeHtml(title) + '</div>'
+                        + '<div class="text-xs font-semibold text-indigo-900 mb-1">' + ndsEscapeHtml(title) + flagBadge + '</div>'
                         + '<div class="text-sm text-gray-700 whitespace-pre-wrap">' + ndsEscapeHtml(answerText) + '</div>'
                         + '</div>';
                 });
             }
 
+            // NEW: Show flagged questions summary if any were flagged
+            let flaggedSummary = '';
+            if (flaggedSet.size > 0) {
+                const flaggedIndices = Array.from(flaggedSet).sort((a, b) => a - b);
+                flaggedSummary = '<div class="rounded-lg border border-amber-200 bg-amber-50 p-3 mt-3">'
+                    + '<div class="text-xs font-semibold text-amber-900 mb-1">⚑ Questions flagged for review</div>'
+                    + '<div class="text-sm text-amber-800">' + flaggedIndices.map(i => 'Q' + (i + 1)).join(', ') + '</div>'
+                    + '</div>';
+            }
+
+            const totalQuestions = parseInt(attemptData.total_questions || 0, 10);
+            const gradedQuestions = parseInt(attemptData.graded_questions || 0, 10);
+            const correctAnswers = parseInt(attemptData.correct_answers || 0, 10);
             const scoreText = hasAutoScore ? (attemptData.score_percent + '%') : 'Pending manual grading';
+            const durationText = getAttemptDurationText(startedAt, submittedAt);
 
             return ''
                 + '<div class="rounded-lg border border-indigo-200 bg-white p-4">'
@@ -2347,12 +3127,27 @@ document.addEventListener('DOMContentLoaded', function() {
                 + '    <span class="text-[11px] font-semibold px-2 py-1 rounded ' + statusClass + '">' + statusText + '</span>'
                 + '  </div>'
                 + '  <div class="text-sm text-gray-700 mb-3">Attempt #' + (attemptData.attempt_no || 1) + ' submitted. Score: <strong>' + scoreText + '</strong></div>'
-                + '  <div class="space-y-2">' + answerRows + '</div>'
+                + '  <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mb-3">'
+                + '    <div class="rounded-md border border-indigo-100 bg-indigo-50 px-3 py-2"><div class="text-[11px] uppercase text-indigo-600 font-semibold">Questions</div><div class="text-sm text-indigo-900 font-medium">' + gradedQuestions + ' graded of ' + totalQuestions + '</div></div>'
+                + '    <div class="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2"><div class="text-[11px] uppercase text-emerald-600 font-semibold">Marks</div><div class="text-sm text-emerald-900 font-medium">' + correctAnswers + ' / ' + (gradedQuestions > 0 ? gradedQuestions : totalQuestions) + '</div></div>'
+                + '    <div class="rounded-md border border-amber-100 bg-amber-50 px-3 py-2"><div class="text-[11px] uppercase text-amber-600 font-semibold">Time Taken</div><div class="text-sm text-amber-900 font-medium">' + ndsEscapeHtml(durationText) + '</div></div>'
+                + '  </div>'
+                + flaggedSummary
+                + '  <div class="space-y-2 mt-3">' + answerRows + '</div>'
+                + '  <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 mt-3">'
+                + '    <div class="text-xs font-semibold text-gray-700 mb-1">Instructor feedback</div>'
+                + '    <div class="text-sm text-gray-600">Detailed lecturer feedback will appear here once manual review is completed.</div>'
+                + '  </div>'
                 + '</div>';
         }
 
         quizAttemptForm.addEventListener('submit', function (event) {
             event.preventDefault();
+            
+            // Clear timer when submitting
+            if (quizTimerInterval) {
+                clearInterval(quizTimerInterval);
+            }
 
             const submitButton = quizAttemptForm.querySelector('button[type="submit"]');
             if (submitButton) {
@@ -2376,11 +3171,17 @@ document.addEventListener('DOMContentLoaded', function() {
             .then(function (response) { return response.json(); })
             .then(function (json) {
                 if (!json || !json.success) {
-                    const message = (json && json.data) ? String(json.data) : 'Could not submit quiz attempt.';
-                    if (quizAttemptFeedback) {
-                        quizAttemptFeedback.className = 'text-sm text-red-600';
-                        quizAttemptFeedback.textContent = message;
+                    const rawMessage = ndsReadAjaxMessage(json ? json.data : null, 'Could not submit quiz attempt.');
+                    let message = rawMessage;
+                    const lowered = String(rawMessage).toLowerCase();
+                    if (lowered.indexOf('maximum number of attempts') !== -1) {
+                        message = 'You have used all available attempts for this quiz. Go back to attempt history to review your previous submissions or contact your lecturer if you think this is wrong.';
+                    } else if (lowered.indexOf('time limit exceeded') !== -1) {
+                        message = 'This attempt was submitted after the time limit expired. Go back to attempt history to review your previous submissions, or contact your lecturer if you believe the timer was incorrect.';
+                    } else if (lowered.indexOf('invalid question order') !== -1 || lowered.indexOf('invalid quiz question mapping') !== -1) {
+                        message = 'We could not verify the quiz question order. Go back to attempt history and restart the quiz attempt.';
                     }
+                    ndsShowQuizAttemptNotice(message, true);
                     return;
                 }
 
@@ -2395,14 +3196,11 @@ document.addEventListener('DOMContentLoaded', function() {
 
                 if (quizAttemptFeedback) {
                     if (passed === true) {
-                        quizAttemptFeedback.className = 'text-sm text-emerald-700 font-medium';
-                        quizAttemptFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score + ' (Pass)';
+                        ndsShowQuizAttemptNotice('Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score + ' (Pass)', false);
                     } else if (passed === false) {
-                        quizAttemptFeedback.className = 'text-sm text-rose-700 font-medium';
-                        quizAttemptFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score + ' (Fail)';
+                        ndsShowQuizAttemptNotice('Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score + ' (Fail)', false);
                     } else {
-                        quizAttemptFeedback.className = 'text-sm text-amber-700 font-medium';
-                        quizAttemptFeedback.textContent = 'Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score;
+                        ndsShowQuizAttemptNotice('Attempt #' + (data.attempt_no || 1) + ' submitted. Score: ' + score, false);
                     }
                 }
 
@@ -2411,13 +3209,17 @@ document.addEventListener('DOMContentLoaded', function() {
                     quizReviewPanel.classList.remove('hidden');
                 }
 
+                const normalizedAttempt = ndsNormalizeAttemptHistoryRow(data);
+                if (normalizedAttempt.attempt_no > 0) {
+                    quizAttemptsState.unshift(normalizedAttempt);
+                    renderQuizAttemptSummary();
+                    renderQuizAttemptHistoryList();
+                }
+
                 quizAttemptForm.classList.add('hidden');
             })
             .catch(function () {
-                if (quizAttemptFeedback) {
-                    quizAttemptFeedback.className = 'text-sm text-red-600';
-                    quizAttemptFeedback.textContent = 'Could not submit quiz attempt. Please try again.';
-                }
+                ndsShowQuizAttemptNotice('Could not submit quiz attempt. Please try again.', true);
             })
             .finally(function () {
                 if (submitButton) {
