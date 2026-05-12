@@ -226,7 +226,7 @@ if (!empty($registration_application) && empty($registration_application['course
         }
     }
 }
-// Also resolve program_id from course if missing
+// Resolve program_id from course if missing (do this even if course_id was just resolved above)
 if (!empty($registration_application) && empty($registration_application['program_id']) && !empty($registration_application['course_id'])) {
     $registration_application['program_id'] = (int) $wpdb->get_var($wpdb->prepare(
         "SELECT program_id FROM {$wpdb->prefix}nds_courses WHERE id = %d",
@@ -273,7 +273,16 @@ if ($can_show_registration_panel) {
         ), ARRAY_A);
     }
 
-    // Fallback: if no direct modules, pull modules from ALL courses in the program
+    // Fallback 1: if no direct modules, try pulling modules from the course's program
+    if (empty($registration_modules) && $registration_program_id <= 0 && $registration_course_id > 0) {
+        // If program_id wasn't set, resolve it now
+        $registration_program_id = (int) $wpdb->get_var($wpdb->prepare(
+            "SELECT program_id FROM {$wpdb->prefix}nds_courses WHERE id = %d",
+            $registration_course_id
+        ));
+    }
+
+    // Fallback 2: if still no modules, pull modules from ALL courses in the program
     if (empty($registration_modules) && $registration_program_id > 0) {
         $registration_modules = $wpdb->get_results($wpdb->prepare(
             "SELECT m.id, {$module_code_expr}, m.name, m.type
@@ -547,6 +556,9 @@ $current_tab = isset($_GET['tab']) ? sanitize_text_field(wp_unslash($_GET['tab']
 $valid_tabs  = $is_applicant
     ? array('overview')
     : array('overview', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity', 'profile');
+$valid_tabs  = $is_applicant
+    ? array('overview')
+    : array('overview', 'registration', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity', 'profile');
 if (!in_array($current_tab, $valid_tabs, true)) {
     $current_tab = 'overview';
 }
@@ -576,17 +588,18 @@ $unread_count = count($unread_notifications);
     ?>
     <?php if ($show_success_modal && !empty($latest_application)) : ?>
         <div
-            id="nds-app-success-modal"
-            class="fixed inset-0 z-40 flex items-center justify-center px-4"
-            style="background-color: rgba(15, 23, 42, 0.35); backdrop-filter: blur(6px);"
-        >
-            <!-- Compact centered dialog, with a hard max-width so it never spans the full viewport -->
-            <div
-                class="bg-white rounded-2xl shadow-2xl p-6 sm:p-7 md:p-8"
-                style="max-width: 640px; width: 100%; margin: 1.5rem auto;"
-            >
-                <div class=" items-center justify-between mb-4">
-                    <h2 class="text-lg sm:text-xl font-semibold text-emerald-800 flex items-center gap-2">
+                    $tabs = array(
+                        'overview'     => array('icon' => 'fa-home', 'label' => 'Overview'),
+                        'registration' => array('icon' => 'fa-id-card', 'label' => 'Registration'),
+                        'courses'      => array('icon' => 'fa-book', 'label' => 'Courses'),
+                        'timetable'   => array('icon' => 'fa-calendar-alt', 'label' => 'Timetable'),
+                        'finances'    => array('icon' => 'fa-money-bill-wave', 'label' => 'R Finances'),
+                        'results'     => array('icon' => 'fa-chart-bar', 'label' => 'Results'),
+                        'graduation'  => array('icon' => 'fa-graduation-cap', 'label' => 'Graduation'),
+                        'certificates' => array('icon' => 'fa-certificate', 'label' => 'Certificates'),
+                        'documents'   => array('icon' => 'fa-file', 'label' => 'Documents'),
+                        'activity'    => array('icon' => 'fa-history', 'label' => 'Activity'),
+                    );
                         <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-emerald-100 text-emerald-700">
                             ✓
                         </span>
@@ -832,7 +845,7 @@ $unread_count = count($unread_notifications);
                 <button type="button" id="nds-status-panel-toggle"
                     class="mt-3 flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-800 transition-colors">
                     <i class="fas fa-chevron-down text-xs transition-transform duration-200" id="nds-status-panel-chevron"></i>
-                    Check your status &amp; registration
+                    Check your status
                 </button>
                 <?php else : ?>
                 <p class="mt-3 text-xs text-gray-500">Your current learner status.</p>
@@ -915,7 +928,8 @@ $unread_count = count($unread_notifications);
                              data-nonce="<?php echo esc_attr(wp_create_nonce('nds_portal_nonce')); ?>">
                             <div class="text-xs font-semibold tracking-wide text-emerald-700 uppercase mb-2">Registration</div>
                             <div class="flex flex-col sm:flex-row gap-2 mb-3">
-                                <select id="nds-registration-action" class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1">
+                                <select id="nds-registration-action" class="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1"
+                                    onchange="(function(el){var wrap=document.getElementById('nds-registration-module-wrap');if(!wrap){return;}var needs=['submit_registration','add_module','cancel_module'].indexOf(el.value)!==-1;wrap.classList.toggle('hidden',!needs);})(this)">
                                     <option value="">Registration actions</option>
                                     <option value="submit_registration">Submit registration</option>
                                     <option value="download_proof">Download proof of registration</option>
@@ -924,29 +938,39 @@ $unread_count = count($unread_notifications);
                                 </select>
                                 <button id="nds-registration-run" type="button" class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">Apply</button>
                             </div>
-                            <div id="nds-registration-module-wrap" class="hidden">
-                                <div class="text-xs text-gray-600 mb-2">Modules for your accepted course:</div>
-                                <?php if (!empty($registration_modules)) : ?>
-                                    <label class="inline-flex items-center text-xs text-gray-700 mb-2">
-                                        <input type="checkbox" id="nds-modules-select-all" class="mr-2">Select all modules
-                                    </label>
-                                    <div class="max-h-40 overflow-y-auto space-y-2 pr-1" id="nds-registration-modules">
-                                        <?php foreach ($registration_modules as $module_row) : ?>
-                                            <?php
-                                            $module_id = (int) ($module_row['id'] ?? 0);
-                                            $checked = in_array($module_id, $registration_selected_module_ids, true);
-                                            ?>
-                                            <label class="flex items-center gap-2 text-sm text-gray-800">
-                                                <input type="checkbox" class="nds-module-pick" value="<?php echo esc_attr($module_id); ?>" <?php checked($checked); ?>>
-                                                <span><?php echo esc_html($module_row['name'] ?? 'Module'); ?><?php if (!empty($module_row['module_code'])) : ?> (<?php echo esc_html($module_row['module_code']); ?>)<?php endif; ?></span>
-                                            </label>
-                                        <?php endforeach; ?>
-                                    </div>
-                                <?php else : ?>
-                                    <p class="text-sm text-gray-600">No modules are configured for this accepted course yet.</p>
-                                <?php endif; ?>
-                            </div>
-                            <div id="nds-registration-feedback" class="mt-3 text-sm" style="display:none;"></div>
+                                // Registration tab content
+                                if ($current_tab === 'registration') {
+                                    if ($can_show_registration_panel) {
+                                        include __DIR__ . '/partials/registration-panel.php';
+                                    } elseif (!empty($registration_block_reason)) {
+                                        echo '<div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">' . esc_html($registration_block_reason) . '</div>';
+                                    } else {
+                                        echo '<p class="text-sm text-emerald-700">Registration will be available once your application is accepted.</p>';
+                                    }
+                                } else {
+                                    // Build course_modules and timeline data (used by overview and courses tabs)
+                                    $course_modules = array();
+                                    foreach ($learner_registered_modules as $lrm_row) {
+                                        $lrm_mid = (int) ($lrm_row['module_id'] ?? 0);
+                                        if ($lrm_mid <= 0) { continue; }
+                                        if (!isset($course_modules[$lrm_mid])) {
+                                            $course_modules[$lrm_mid] = array(
+                                                'module_id'       => $lrm_mid,
+                                                'module_name'     => $lrm_row['module_name'] ?? 'Module',
+                                                'module_code'     => $lrm_row['module_code'] ?? '',
+                                                'course_name'     => $lrm_row['course_name'] ?? 'Course',
+                                                'course_id'       => (int) ($lrm_row['course_id'] ?? 0),
+                                                'program_name'    => $lrm_row['program_name'] ?? '',
+                                                'content_rows'    => $module_content_by_module[$lrm_mid] ?? array(),
+                                                'assessment_rows' => array_merge(
+                                                    $module_assessments_by_module[$lrm_mid] ?? array(),
+                                                    $course_assessments_by_course[(int) ($lrm_row['course_id'] ?? 0)] ?? array()
+                                                ),
+                                            );
+                                        }
+                                    }
+
+                                    $courses_tab_url    = nds_learner_portal_tab_url('courses');
                         </div>
                     <?php elseif (!empty($registration_block_reason)) : ?>
                         <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
@@ -970,6 +994,152 @@ $unread_count = count($unread_notifications);
                 });
             }
         })();
+        </script>
+        <script>
+        document.addEventListener('DOMContentLoaded', function () {
+            var panel = document.getElementById('nds-registration-panel');
+            var actionSelect = document.getElementById('nds-registration-action');
+            var applyBtn = document.getElementById('nds-registration-run');
+            var moduleWrap = document.getElementById('nds-registration-module-wrap');
+            var feedback = document.getElementById('nds-registration-feedback');
+            var selectAll = document.getElementById('nds-modules-select-all');
+
+            if (!panel || !actionSelect || !applyBtn || !moduleWrap || panel.getAttribute('data-reg-standalone-bound') === '1') {
+                return;
+            }
+            panel.setAttribute('data-reg-standalone-bound', '1');
+
+            var needsModules = function (action) {
+                return action === 'submit_registration' || action === 'add_module' || action === 'cancel_module';
+            };
+
+            var syncWrap = function () {
+                moduleWrap.classList.toggle('hidden', !needsModules(actionSelect.value));
+            };
+
+            var syncSelectAll = function () {
+                if (!selectAll) {
+                    return;
+                }
+                var checks = Array.prototype.slice.call(document.querySelectorAll('.nds-module-pick'));
+                if (checks.length === 0) {
+                    selectAll.checked = false;
+                    selectAll.indeterminate = false;
+                    return;
+                }
+                var checkedCount = checks.filter(function (el) { return el.checked; }).length;
+                selectAll.checked = checkedCount === checks.length;
+                selectAll.indeterminate = checkedCount > 0 && checkedCount < checks.length;
+            };
+
+            var showFeedback = function (message, isError) {
+                if (!feedback) {
+                    return;
+                }
+                feedback.style.display = 'block';
+                feedback.textContent = message;
+                feedback.className = isError
+                    ? 'mt-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2'
+                    : 'mt-3 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded px-3 py-2';
+            };
+
+            actionSelect.addEventListener('change', syncWrap);
+            actionSelect.addEventListener('input', syncWrap);
+
+            if (selectAll) {
+                selectAll.addEventListener('change', function () {
+                    var checked = !!selectAll.checked;
+                    document.querySelectorAll('.nds-module-pick').forEach(function (el) {
+                        el.checked = checked;
+                    });
+                    syncSelectAll();
+                });
+            }
+
+            document.querySelectorAll('.nds-module-pick').forEach(function (el) {
+                el.addEventListener('change', syncSelectAll);
+            });
+
+            applyBtn.addEventListener('click', function () {
+                var selectedAction = actionSelect.value;
+                var courseId = panel.getAttribute('data-course-id') || '';
+                var nonce = panel.getAttribute('data-nonce') || '';
+
+                if (!selectedAction) {
+                    showFeedback('Please choose a registration action first.', true);
+                    return;
+                }
+
+                syncWrap();
+                var selectedModuleIds = Array.prototype.slice.call(document.querySelectorAll('.nds-module-pick:checked')).map(function (el) {
+                    return el.value;
+                });
+
+                if (needsModules(selectedAction) && selectedModuleIds.length === 0) {
+                    showFeedback('Please select at least one module for this action.', true);
+                    return;
+                }
+
+                applyBtn.disabled = true;
+                applyBtn.textContent = 'Working...';
+
+                var payload = new URLSearchParams();
+                payload.append('action', 'nds_portal_registration_action');
+                payload.append('nonce', nonce);
+                payload.append('registration_action', selectedAction);
+                payload.append('course_id', String(courseId));
+                selectedModuleIds.forEach(function (id) {
+                    payload.append('module_ids[]', id);
+                });
+
+                fetch('<?php echo esc_url(admin_url('admin-ajax.php')); ?>', {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: payload.toString()
+                })
+                .then(function (res) { return res.json(); })
+                .then(function (json) {
+                    if (!json || !json.success) {
+                        showFeedback((json && json.data) ? json.data : 'Registration action failed.', true);
+                        return;
+                    }
+
+                    var data = json.data || {};
+                    showFeedback(data.message || 'Action completed successfully.', false);
+
+                    if (selectedAction === 'download_proof' && data.proof_content) {
+                        var blob = new Blob([data.proof_content], { type: 'text/plain;charset=utf-8' });
+                        var url = URL.createObjectURL(blob);
+                        var a = document.createElement('a');
+                        a.href = url;
+                        a.download = data.proof_filename || 'proof-of-registration.txt';
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                    }
+
+                    if (Array.isArray(data.enrolled_module_ids)) {
+                        var enrolled = data.enrolled_module_ids.map(function (v) { return parseInt(v, 10); });
+                        document.querySelectorAll('.nds-module-pick').forEach(function (el) {
+                            el.checked = enrolled.indexOf(parseInt(el.value, 10)) !== -1;
+                        });
+                        syncSelectAll();
+                    }
+                })
+                .catch(function () {
+                    showFeedback('Something went wrong while processing the action. Please try again.', true);
+                })
+                .finally(function () {
+                    applyBtn.disabled = false;
+                    applyBtn.textContent = 'Apply';
+                });
+            });
+
+            syncWrap();
+            syncSelectAll();
+        });
         </script>
         <?php endif; ?>
 
@@ -1165,10 +1335,7 @@ $unread_count = count($unread_notifications);
                                             $event_type = (string) ($timeline_row['type'] ?? 'assessment');
                                             $event_css  = $event_type === 'assignment' ? 'text-orange-700' : ($event_type === 'quiz' ? 'text-indigo-700' : 'text-slate-700');
                                             $event_icon = $event_type === 'assignment' ? 'fa-file-alt' : ($event_type === 'quiz' ? 'fa-question-circle' : 'fa-book');
-                                            $module_link = add_query_arg(
-                                                array('tab' => 'courses', 'module_id' => (int) $timeline_row['module_id']),
-                                                home_url('/portal/')
-                                            );
+                                            $module_link = home_url('/portal/module/' . (int) $timeline_row['module_id'] . '/');
                                             ?>
                                             <div class="nds-timeline-item py-4"
                                                  data-ts="<?php echo esc_attr((int) $timeline_row['due_ts']); ?>"
@@ -1203,10 +1370,7 @@ $unread_count = count($unread_notifications);
                                     <div class="space-y-2 mb-4">
                                         <?php foreach ($course_modules as $module_item) : ?>
                                             <?php
-                                            $module_link = add_query_arg(
-                                                array('tab' => 'courses', 'module_id' => (int) $module_item['module_id']),
-                                                home_url('/portal/')
-                                            );
+                                            $module_link = home_url('/portal/module/' . (int) $module_item['module_id'] . '/');
                                             ?>
                                             <a href="<?php echo esc_url($module_link); ?>" class="w-full text-left flex items-center gap-2 text-lg font-medium text-black hover:text-slate-700">
                                                 <i class="fas fa-graduation-cap text-xl text-slate-700"></i>
@@ -1459,7 +1623,7 @@ $unread_count = count($unread_notifications);
                                 foreach ($selected_quiz_attempts as $attempt_row_for_stats) {
                                     $score_val_for_stats = isset($attempt_row_for_stats['score_percent']) ? (float) $attempt_row_for_stats['score_percent'] : null;
                                     $graded_questions_for_stats = (int) ($attempt_row_for_stats['graded_questions'] ?? 0);
-                                    if ($score_val_for_stats !== null && $graded_questions_for_stats > 0) {
+                                    if ($score_val_for_stats !== null) {
                                         $scored_values[] = array(
                                             'attempt_no' => (int) ($attempt_row_for_stats['attempt_no'] ?? 0),
                                             'score' => $score_val_for_stats,
@@ -1800,7 +1964,7 @@ $unread_count = count($unread_notifications);
                                                         <?php foreach ($selected_quiz_attempts as $attempt_row) : ?>
                                                             <?php
                                                             $score_val = isset($attempt_row['score_percent']) ? (float) $attempt_row['score_percent'] : null;
-                                                            $has_auto_score = $score_val !== null && (int) ($attempt_row['graded_questions'] ?? 0) > 0;
+                                                            $has_auto_score = $score_val !== null;
                                                             $is_pass = $has_auto_score && $score_val >= $selected_quiz_pass_threshold;
                                                             $is_best_attempt = $has_auto_score && $quiz_attempt_stats['best_attempt_no'] !== null && (int) ($attempt_row['attempt_no'] ?? 0) === (int) $quiz_attempt_stats['best_attempt_no'];
                                                             ?>
@@ -2005,14 +2169,7 @@ $unread_count = count($unread_notifications);
                                                                 <div class="mt-1.5 flex gap-3 text-xs">
                                                                     <?php if ($ctype === 'quiz') : ?>
                                                                         <?php
-                                                                        $open_quiz_url = add_query_arg(
-                                                                            array(
-                                                                                'tab' => 'courses',
-                                                                                'module_id' => (int) $selected_module['module_id'],
-                                                                                'quiz_content_id' => (int) ($content_item['id'] ?? 0),
-                                                                            ),
-                                                                            home_url('/portal/')
-                                                                        );
+                                                                        $open_quiz_url = home_url('/portal/quiz/' . (int) ($content_item['id'] ?? 0) . '/');
                                                                         ?>
                                                                         <a href="<?php echo esc_url($open_quiz_url); ?>" class="text-indigo-600 hover:underline font-medium nds-track-content-view" data-content-id="<?php echo (int) ($content_item['id'] ?? 0); ?>" data-view-type="open_quiz">Open quiz</a>
                                                                     <?php endif; ?>
@@ -2125,13 +2282,14 @@ $unread_count = count($unread_notifications);
                                         <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
                                             <?php foreach ($course_mods as $card_mod) :
                                                 $card_link = add_query_arg(array('tab'=>'courses','module_id'=>(int)$card_mod['module_id']), home_url('/portal/'));
+                                                $module_detail_link = home_url('/portal/module/' . (int)$card_mod['module_id'] . '/');
                                                 $banner    = $card_banner_colors[$card_idx % count($card_banner_colors)];
                                                 $n_content = count($card_mod['content_rows'] ?? array());
                                                 $n_assess  = count($card_mod['assessment_rows'] ?? array());
                                                 $card_idx++;
                                             ?>
-                                                <a href="<?php echo esc_url($card_link); ?>"
-                                                   class="group block bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 overflow-hidden">
+                                                <div class="group block bg-white rounded-xl border border-gray-200 shadow-sm hover:shadow-md hover:-translate-y-0.5 transition-all duration-200 overflow-hidden cursor-pointer"
+                                                     onclick="window.location.href='<?php echo esc_url($module_detail_link); ?>'">
                                                     <!-- Coloured banner -->
                                                     <div class="<?php echo esc_attr($banner); ?> h-28 relative overflow-hidden">
                                                         <div class="absolute inset-0 opacity-20" style="background-image:radial-gradient(circle,#fff 1px,transparent 1px);background-size:22px 22px;"></div>
@@ -2163,9 +2321,9 @@ $unread_count = count($unread_notifications);
                                                                 <span><i class="fas fa-tasks mr-1"></i><?php echo $n_assess; ?></span>
                                                             <?php endif; ?>
                                                         </div>
-                                                        <i class="fas fa-ellipsis-v text-gray-300 group-hover:text-gray-500 transition-colors"></i>
+                                                        <i class="fas fa-arrow-right text-gray-300 group-hover:text-gray-500 transition-colors"></i>
                                                     </div>
-                                                </a>
+                                                </div>
                                             <?php endforeach; ?>
                                         </div>
                                     </div>
@@ -2359,6 +2517,7 @@ document.addEventListener('DOMContentLoaded', function() {
         syncSelectAllState();
 
         registrationAction.addEventListener('change', syncRegistrationActionUI);
+        registrationAction.addEventListener('input', syncRegistrationActionUI);
 
         if (selectAllModules) {
             selectAllModules.addEventListener('change', function () {
@@ -2375,6 +2534,9 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         registrationRun.addEventListener('click', function () {
+            // Failsafe: Ensure UI is synced before checking modules
+            syncRegistrationActionUI();
+            
             const selectedAction = registrationAction.value;
             const courseId = registrationPanel.getAttribute('data-course-id');
             const nonce = registrationPanel.getAttribute('data-nonce');
@@ -2386,6 +2548,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
             const selectedModuleInputs = Array.from(document.querySelectorAll('.nds-module-pick:checked'));
             const selectedModuleIds = selectedModuleInputs.map(function (el) { return el.value; });
+
+            // Show the module wrap if this action needs modules
+            if ((selectedAction === 'submit_registration' || selectedAction === 'add_module' || selectedAction === 'cancel_module')) {
+                const moduleWrap = document.querySelector('#nds-registration-module-wrap');
+                if (moduleWrap) {
+                    moduleWrap.classList.remove('hidden');
+                }
+            }
 
             if ((selectedAction === 'submit_registration' || selectedAction === 'add_module' || selectedAction === 'cancel_module') && selectedModuleIds.length === 0) {
                 setRegistrationFeedback('Please select at least one module for this action.', true);
@@ -2576,7 +2746,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     function ndsGetQuizStats(attempts) {
         const scored = attempts.filter(function (attempt) {
-            return attempt.score_percent !== null && attempt.graded_questions > 0;
+            return attempt.score_percent !== null;
         });
 
         let best = null;
@@ -2633,7 +2803,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
 
     function renderQuizAttemptEntry(attemptRow) {
-        const hasAutoScore = attemptRow.score_percent !== null && attemptRow.graded_questions > 0;
+        const hasAutoScore = attemptRow.score_percent !== null;
         const thresholdRaw = quizAttemptForm ? quizAttemptForm.getAttribute('data-pass-threshold') : null;
         const threshold = thresholdRaw ? parseFloat(thresholdRaw) : 50;
         const isPass = hasAutoScore && attemptRow.score_percent >= threshold;
@@ -3044,7 +3214,8 @@ document.addEventListener('DOMContentLoaded', function() {
         });
 
         function buildQuizReviewHtml(attemptData) {
-            const hasAutoScore = attemptData.score_percent !== null && attemptData.score_percent !== undefined && attemptData.graded_questions > 0;
+            const hasAutoScore = attemptData.score_percent !== null && attemptData.score_percent !== undefined;
+            const reviewAllowed = attemptData.review_allowed !== false;
             const statusText = attemptData.passed === true ? 'Pass' : (attemptData.passed === false ? 'Fail' : 'Pending review');
             const statusClass = attemptData.passed === true
                 ? 'bg-emerald-100 text-emerald-700'
@@ -3071,7 +3242,7 @@ document.addEventListener('DOMContentLoaded', function() {
             const flaggedQuestionsStr = attemptData.flagged_questions || '';
             const flaggedSet = flaggedQuestionsStr !== '' ? new Set(flaggedQuestionsStr.split(',').map(s => parseInt(s))) : new Set();
 
-            const reviewRows = Array.isArray(attemptData.review) ? attemptData.review : [];
+            const reviewRows = reviewAllowed && Array.isArray(attemptData.review) ? attemptData.review : [];
             let answerRows = '';
             let flaggedRows = '';
 
@@ -3155,6 +3326,10 @@ document.addEventListener('DOMContentLoaded', function() {
             const scoreText = hasAutoScore ? (attemptData.score_percent + '%') : 'Pending manual grading';
             const durationText = getAttemptDurationText(startedAt, submittedAt);
 
+            const reviewAccessNote = reviewAllowed
+                ? ''
+                : '<div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 mt-3"><div class="text-sm text-gray-700">Answer review is disabled for this quiz by your lecturer.</div></div>';
+
             return ''
                 + '<div class="rounded-lg border border-indigo-200 bg-white p-4">'
                 + '  <div class="flex items-center justify-between mb-2">'
@@ -3168,7 +3343,8 @@ document.addEventListener('DOMContentLoaded', function() {
                 + '    <div class="rounded-md border border-amber-100 bg-amber-50 px-3 py-2"><div class="text-[11px] uppercase text-amber-600 font-semibold">Time Taken</div><div class="text-sm text-amber-900 font-medium">' + ndsEscapeHtml(durationText) + '</div></div>'
                 + '  </div>'
                 + flaggedSummary
-                + '  <div class="space-y-2 mt-3">' + answerRows + '</div>'
+                + reviewAccessNote
+                + (reviewAllowed ? '  <div class="space-y-2 mt-3">' + answerRows + '</div>' : '')
                 + '  <div class="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 mt-3">'
                 + '    <div class="text-xs font-semibold text-gray-700 mb-1">Instructor feedback</div>'
                 + '    <div class="text-sm text-gray-600">Detailed lecturer feedback will appear here once manual review is completed.</div>'
@@ -3226,7 +3402,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     : 'Pending manual grading';
                 const thresholdRaw = quizAttemptForm.getAttribute('data-pass-threshold');
                 const threshold = thresholdRaw ? parseFloat(thresholdRaw) : 50;
-                const hasAutoScore = data.score_percent !== null && data.score_percent !== undefined && data.graded_questions > 0;
+                const hasAutoScore = data.score_percent !== null && data.score_percent !== undefined;
                 const passed = hasAutoScore ? parseFloat(data.score_percent) >= threshold : null;
 
                 if (quizAttemptFeedback) {

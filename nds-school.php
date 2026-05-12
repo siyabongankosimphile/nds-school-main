@@ -855,6 +855,10 @@ function nds_portal_ensure_quiz_attempts_table() {
         answers_json LONGTEXT NULL,
         question_order_json LONGTEXT NULL,
         flagged_questions VARCHAR(255) NULL,
+        requires_manual_grading TINYINT(1) DEFAULT 0,
+        manual_feedback LONGTEXT NULL,
+        manually_graded_at DATETIME NULL,
+        manually_graded_by INT NULL,
         started_at DATETIME NULL,
         duration_seconds INT NULL,
         submitted_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -889,6 +893,18 @@ function nds_portal_ensure_quiz_attempts_table() {
         }
         if (!in_array('flagged_questions', $existing_cols, true)) {
             $wpdb->query("ALTER TABLE {$table} ADD COLUMN flagged_questions VARCHAR(255) NULL AFTER answers_json");
+        }
+        if (!in_array('requires_manual_grading', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN requires_manual_grading TINYINT(1) DEFAULT 0 AFTER flagged_questions");
+        }
+        if (!in_array('manual_feedback', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN manual_feedback LONGTEXT NULL AFTER requires_manual_grading");
+        }
+        if (!in_array('manually_graded_at', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN manually_graded_at DATETIME NULL AFTER manual_feedback");
+        }
+        if (!in_array('manually_graded_by', $existing_cols, true)) {
+            $wpdb->query("ALTER TABLE {$table} ADD COLUMN manually_graded_by INT NULL AFTER manually_graded_at");
         }
     }
 
@@ -1043,7 +1059,7 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
 
     global $wpdb;
         $content = $wpdb->get_row($wpdb->prepare(
-                                                                "SELECT lc.id, lc.module_id, lc.course_id, lc.title, lc.quiz_data, lc.min_grade_required, lc.time_limit_minutes, lc.attempts_allowed, lc.pass_percentage,
+                                                                "SELECT lc.id, lc.module_id, lc.course_id, lc.title, lc.quiz_data, lc.min_grade_required, lc.time_limit_minutes, lc.attempts_allowed, lc.pass_percentage, lc.allow_review_after_submit,
                                 lc.access_grouping, lc.allowed_cohort_ids,
                                 cs.access_grouping AS section_access_grouping, cs.allowed_cohort_ids AS section_allowed_cohort_ids
                  FROM {$wpdb->prefix}nds_lecturer_content lc
@@ -1170,6 +1186,7 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
     $total_questions = count($questions);
     $graded_questions = 0;
     $correct_answers = 0;
+    $manual_questions_count = 0;
     $normalized_answers = array();
     $correct_map = array();
     $review_rows = array();
@@ -1216,6 +1233,7 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
 
         $normalized_answers[$idx] = sanitize_textarea_field($answer_raw);
         $correct_map[$idx] = (string) ($question['correct'] ?? '');
+        $manual_questions_count++;
         $review_rows[] = array(
             'index' => $idx,
             'type' => $q_type,
@@ -1231,13 +1249,18 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
     $score_percent = $graded_questions > 0
         ? round(($correct_answers / $graded_questions) * 100, 2)
         : null;
+    $requires_manual_grading = $manual_questions_count > 0;
+    if ($requires_manual_grading) {
+        $score_percent = null;
+    }
     $pass_threshold = 50.0;
     if (isset($content['pass_percentage']) && $content['pass_percentage'] !== null && $content['pass_percentage'] !== '') {
         $pass_threshold = max(0.0, min(100.0, (float) $content['pass_percentage']));
     } elseif (isset($content['min_grade_required']) && $content['min_grade_required'] !== null && $content['min_grade_required'] !== '') {
         $pass_threshold = max(0.0, min(100.0, (float) $content['min_grade_required']));
     }
-    $passed = $score_percent !== null ? ($score_percent >= $pass_threshold) : null;
+    $passed = (!$requires_manual_grading && $score_percent !== null) ? ($score_percent >= $pass_threshold) : null;
+    $review_allowed = isset($content['allow_review_after_submit']) ? ((int) $content['allow_review_after_submit'] === 1) : true;
 
     $attempt_no = (int) $wpdb->get_var($wpdb->prepare(
         "SELECT COALESCE(MAX(attempt_no), 0) + 1
@@ -1293,13 +1316,14 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
             'answers_json' => wp_json_encode($normalized_answers),
             'question_order_json' => !empty($question_order) ? wp_json_encode($question_order) : null,
             'flagged_questions' => $flagged_questions,
+            'requires_manual_grading' => $requires_manual_grading ? 1 : 0,
             'started_at' => $started_at_value,
             'duration_seconds' => $duration_seconds,
             'submitted_at' => $submitted_at_value,
             'ip_address' => $client_ip,
             'user_agent' => $user_agent,
         ),
-        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%s', '%d', '%s', '%s', '%s')
+        array('%d', '%d', '%d', '%d', '%d', '%d', '%d', '%d', '%f', '%s', '%s', '%s', '%d', '%s', '%d', '%s', '%s', '%s')
     );
 
     if ($saved === false) {
@@ -1314,6 +1338,8 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
         'total_questions' => $total_questions,
         'graded_questions' => $graded_questions,
         'correct_answers' => $correct_answers,
+        'manual_questions_count' => $manual_questions_count,
+        'requires_manual_grading' => $requires_manual_grading,
         'score_percent' => $score_percent,
         'pass_threshold' => $pass_threshold,
         'passed' => $passed,
@@ -1322,7 +1348,8 @@ add_action('wp_ajax_nds_portal_submit_quiz_attempt', function () {
         'started_at' => $started_at_value,
         'submitted_at' => $submitted_at_value,
         'flagged_questions' => $flagged_questions,
-        'review' => $review_rows,
+        'review_allowed' => $review_allowed,
+        'review' => $review_allowed ? $review_rows : array(),
     ));
 });
 
@@ -2935,6 +2962,12 @@ add_filter('query_vars', function ($vars) {
     $vars[] = 'nds_program_id';
     // Portal query var for /portal/
     $vars[] = 'nds_portal';
+    // Module detail query var for /portal/module/<id>/
+    $vars[] = 'nds_portal_module';
+    // Quiz interface query var for /portal/quiz/<id>/
+    $vars[] = 'nds_portal_quiz';
+    // Online application query var for /online-application/
+    $vars[] = 'nds_online_application';
     // Staff portal query var for /staff-portal/
     $vars[] = 'nds_staff_portal';
     // Application administrator portal query var for /administrator-portal/
@@ -3026,12 +3059,26 @@ register_deactivation_hook(__FILE__, 'nds_school_deactivate');
 add_action('init', function () {
     // Keep the existing /portal/ rewrite, but route it to a lean, learner-only dashboard
     add_rewrite_rule('^portal/?$', 'index.php?nds_portal=1', 'top');
+    // Module detail page: /portal/module/<id>/
+    add_rewrite_rule('^portal/module/([0-9]+)/?$', 'index.php?nds_portal_module=$matches[1]', 'top');
+    // Quiz interface page: /portal/quiz/<id>/
+    add_rewrite_rule('^portal/quiz/([0-9]+)/?$', 'index.php?nds_portal_quiz=$matches[1]', 'top');
+    // Public online application route
+    add_rewrite_rule('^online-application/?$', 'index.php?nds_online_application=1', 'top');
     // Staff portal route
     add_rewrite_rule('^staff-portal/?$', 'index.php?nds_staff_portal=1', 'top');
     // Application administrator portal route
     add_rewrite_rule('^administrator-portal/?$', 'index.php?nds_admin_portal=1', 'top');
     // Timetable coordinator portal route
     add_rewrite_rule('^timetable-portal/?$', 'index.php?nds_timetable_portal=1', 'top');
+    
+    // One-time rewrite rules flush (check version)
+    $current_version = '2026-05-12-portal-routes-v2';
+    $flushed_version = get_option('nds_rewrite_rules_flushed_version');
+    if ($flushed_version !== $current_version) {
+        flush_rewrite_rules(false);
+        update_option('nds_rewrite_rules_flushed_version', $current_version);
+    }
 });
 
 add_action('template_redirect', function () {
@@ -3090,6 +3137,50 @@ add_action('template_redirect', function () {
 
     // Render a standalone full-screen learner dashboard (no theme header/nav)
     include plugin_dir_path(__FILE__) . 'templates/learner-portal.php';
+    exit;
+});
+
+add_action('template_redirect', function () {
+    $is_online_application = (int) get_query_var('nds_online_application');
+    if ($is_online_application !== 1) {
+        return;
+    }
+
+    include plugin_dir_path(__FILE__) . 'includes/applicationForm.php';
+    exit;
+});
+
+// Module detail page: /portal/module/<id>/
+add_action('template_redirect', function () {
+    $module_id = (int) get_query_var('nds_portal_module');
+    if ($module_id <= 0) {
+        return;
+    }
+
+    // Require login
+    if (!is_user_logged_in()) {
+        wp_safe_redirect(wp_login_url(home_url('/portal/')));
+        exit;
+    }
+
+    include plugin_dir_path(__FILE__) . 'templates/module-detail.php';
+    exit;
+});
+
+// Quiz interface page: /portal/quiz/<id>/
+add_action('template_redirect', function () {
+    $content_id = (int) get_query_var('nds_portal_quiz');
+    if ($content_id <= 0) {
+        return;
+    }
+
+    // Require login
+    if (!is_user_logged_in()) {
+        wp_safe_redirect(wp_login_url(home_url('/portal/')));
+        exit;
+    }
+
+    include plugin_dir_path(__FILE__) . 'templates/quiz-interface.php';
     exit;
 });
 
@@ -3609,6 +3700,14 @@ add_action('init', function () {
         update_option('nds_admin_portal_rules_flushed', 1);
     }
 }, 102);
+
+// Force flush rewrite rules on next page load (one-time for online application route)
+add_action('init', function () {
+    if (!get_option('nds_online_application_rules_flushed')) {
+        flush_rewrite_rules(false);
+        update_option('nds_online_application_rules_flushed', 1);
+    }
+}, 103);
 
 // -----------------------------
 // Student Portal helpers & AJAX
