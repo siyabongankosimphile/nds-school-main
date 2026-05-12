@@ -556,6 +556,9 @@ $current_tab = isset($_GET['tab']) ? sanitize_text_field(wp_unslash($_GET['tab']
 $valid_tabs  = $is_applicant
     ? array('overview')
     : array('overview', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity', 'profile');
+$valid_tabs  = $is_applicant
+    ? array('overview')
+    : array('overview', 'registration', 'courses', 'timetable', 'finances', 'results', 'graduation', 'certificates', 'documents', 'activity', 'profile');
 if (!in_array($current_tab, $valid_tabs, true)) {
     $current_tab = 'overview';
 }
@@ -585,17 +588,18 @@ $unread_count = count($unread_notifications);
     ?>
     <?php if ($show_success_modal && !empty($latest_application)) : ?>
         <div
-            id="nds-app-success-modal"
-            class="fixed inset-0 z-40 flex items-center justify-center px-4"
-            style="background-color: rgba(15, 23, 42, 0.35); backdrop-filter: blur(6px);"
-        >
-            <!-- Compact centered dialog, with a hard max-width so it never spans the full viewport -->
-            <div
-                class="bg-white rounded-2xl shadow-2xl p-6 sm:p-7 md:p-8"
-                style="max-width: 640px; width: 100%; margin: 1.5rem auto;"
-            >
-                <div class=" items-center justify-between mb-4">
-                    <h2 class="text-lg sm:text-xl font-semibold text-emerald-800 flex items-center gap-2">
+                    $tabs = array(
+                        'overview'     => array('icon' => 'fa-home', 'label' => 'Overview'),
+                        'registration' => array('icon' => 'fa-id-card', 'label' => 'Registration'),
+                        'courses'      => array('icon' => 'fa-book', 'label' => 'Courses'),
+                        'timetable'   => array('icon' => 'fa-calendar-alt', 'label' => 'Timetable'),
+                        'finances'    => array('icon' => 'fa-money-bill-wave', 'label' => 'R Finances'),
+                        'results'     => array('icon' => 'fa-chart-bar', 'label' => 'Results'),
+                        'graduation'  => array('icon' => 'fa-graduation-cap', 'label' => 'Graduation'),
+                        'certificates' => array('icon' => 'fa-certificate', 'label' => 'Certificates'),
+                        'documents'   => array('icon' => 'fa-file', 'label' => 'Documents'),
+                        'activity'    => array('icon' => 'fa-history', 'label' => 'Activity'),
+                    );
                         <span class="inline-flex items-center justify-center w-7 h-7 rounded-full bg-emerald-100 text-emerald-700">
                             ✓
                         </span>
@@ -841,7 +845,7 @@ $unread_count = count($unread_notifications);
                 <button type="button" id="nds-status-panel-toggle"
                     class="mt-3 flex items-center gap-1 text-xs font-medium text-emerald-600 hover:text-emerald-800 transition-colors">
                     <i class="fas fa-chevron-down text-xs transition-transform duration-200" id="nds-status-panel-chevron"></i>
-                    Check your status &amp; registration
+                    Check your status
                 </button>
                 <?php else : ?>
                 <p class="mt-3 text-xs text-gray-500">Your current learner status.</p>
@@ -934,29 +938,39 @@ $unread_count = count($unread_notifications);
                                 </select>
                                 <button id="nds-registration-run" type="button" class="inline-flex items-center justify-center px-4 py-2 rounded-lg bg-emerald-600 text-white text-sm font-medium hover:bg-emerald-700">Apply</button>
                             </div>
-                            <div id="nds-registration-module-wrap" class="hidden">
-                                <div class="text-xs text-gray-600 mb-2">Modules for your accepted course:</div>
-                                <?php if (!empty($registration_modules)) : ?>
-                                    <label class="inline-flex items-center text-xs text-gray-700 mb-2">
-                                        <input type="checkbox" id="nds-modules-select-all" class="mr-2">Select all modules
-                                    </label>
-                                    <div class="max-h-40 overflow-y-auto space-y-2 pr-1" id="nds-registration-modules">
-                                        <?php foreach ($registration_modules as $module_row) : ?>
-                                            <?php
-                                            $module_id = (int) ($module_row['id'] ?? 0);
-                                            $checked = in_array($module_id, $registration_selected_module_ids, true);
-                                            ?>
-                                            <label class="flex items-center gap-2 text-sm text-gray-800">
-                                                <input type="checkbox" class="nds-module-pick" value="<?php echo esc_attr($module_id); ?>" <?php checked($checked); ?>>
-                                                <span><?php echo esc_html($module_row['name'] ?? 'Module'); ?><?php if (!empty($module_row['module_code'])) : ?> (<?php echo esc_html($module_row['module_code']); ?>)<?php endif; ?></span>
-                                            </label>
-                                        <?php endforeach; ?>
-                                    </div>
-                                <?php else : ?>
-                                    <p class="text-sm text-gray-600">No modules are configured for this accepted course yet.</p>
-                                <?php endif; ?>
-                            </div>
-                            <div id="nds-registration-feedback" class="mt-3 text-sm" style="display:none;"></div>
+                                // Registration tab content
+                                if ($current_tab === 'registration') {
+                                    if ($can_show_registration_panel) {
+                                        include __DIR__ . '/partials/registration-panel.php';
+                                    } elseif (!empty($registration_block_reason)) {
+                                        echo '<div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">' . esc_html($registration_block_reason) . '</div>';
+                                    } else {
+                                        echo '<p class="text-sm text-emerald-700">Registration will be available once your application is accepted.</p>';
+                                    }
+                                } else {
+                                    // Build course_modules and timeline data (used by overview and courses tabs)
+                                    $course_modules = array();
+                                    foreach ($learner_registered_modules as $lrm_row) {
+                                        $lrm_mid = (int) ($lrm_row['module_id'] ?? 0);
+                                        if ($lrm_mid <= 0) { continue; }
+                                        if (!isset($course_modules[$lrm_mid])) {
+                                            $course_modules[$lrm_mid] = array(
+                                                'module_id'       => $lrm_mid,
+                                                'module_name'     => $lrm_row['module_name'] ?? 'Module',
+                                                'module_code'     => $lrm_row['module_code'] ?? '',
+                                                'course_name'     => $lrm_row['course_name'] ?? 'Course',
+                                                'course_id'       => (int) ($lrm_row['course_id'] ?? 0),
+                                                'program_name'    => $lrm_row['program_name'] ?? '',
+                                                'content_rows'    => $module_content_by_module[$lrm_mid] ?? array(),
+                                                'assessment_rows' => array_merge(
+                                                    $module_assessments_by_module[$lrm_mid] ?? array(),
+                                                    $course_assessments_by_course[(int) ($lrm_row['course_id'] ?? 0)] ?? array()
+                                                ),
+                                            );
+                                        }
+                                    }
+
+                                    $courses_tab_url    = nds_learner_portal_tab_url('courses');
                         </div>
                     <?php elseif (!empty($registration_block_reason)) : ?>
                         <div class="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
