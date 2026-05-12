@@ -27,17 +27,17 @@ class NDS_Calendar {
         // FullCalendar CSS
         wp_enqueue_style(
             'fullcalendar-css',
-            'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css',
+            plugin_dir_url(dirname(__FILE__)) . 'assets/vendor/fullcalendar/main.min.css',
             array(),
-            '6.1.10'
+            '5.11.5'
         );
         
         // FullCalendar JS
         wp_enqueue_script(
             'fullcalendar-js',
-            'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js',
+            plugin_dir_url(dirname(__FILE__)) . 'assets/vendor/fullcalendar/main.min.js',
             array('jquery'),
-            '6.1.10',
+            '5.11.5',
             true
         );
         

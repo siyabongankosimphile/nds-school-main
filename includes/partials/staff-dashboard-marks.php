@@ -55,6 +55,18 @@ if ($graded_count > 0) {
 ?>
 
 <div class="space-y-6">
+    <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <div class="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div>
+                <h2 class="text-xl font-semibold text-gray-900">Marks Overview</h2>
+                <p class="text-sm text-gray-600 mt-1">Track grading progress and final marks across your assigned courses.</p>
+            </div>
+            <a href="<?php echo esc_url(nds_staff_tab_url('gradebook', $selected_course_id ?: null)); ?>" class="inline-flex items-center px-4 py-2 rounded-lg bg-blue-600 text-white text-sm hover:bg-blue-700 w-fit">
+                <i class="fas fa-table mr-2"></i>Open Gradebook
+            </a>
+        </div>
+    </div>
+
     <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
         <div class="bg-gray-50 rounded-lg border border-gray-200 p-4">
             <p class="text-xs uppercase tracking-wide text-gray-500 mb-1">Total Learners</p>

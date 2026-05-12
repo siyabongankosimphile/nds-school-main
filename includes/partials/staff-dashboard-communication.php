@@ -41,9 +41,32 @@ $recent_messages = $wpdb->get_results($wpdb->prepare(
      LIMIT 20",
     (int) $staff_id
 ), ARRAY_A);
+
+$announcement_count = count($recent_announcements);
+$message_count = count($recent_messages);
+$reachable_students = count($students_for_message);
 ?>
 
 <div class="space-y-6">
+    <div class="bg-white border border-gray-200 rounded-xl p-5">
+        <h2 class="text-xl font-semibold text-gray-900">Communication Hub</h2>
+        <p class="text-sm text-gray-600 mt-1">Post course announcements and send direct learner messages from one workspace.</p>
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-4">
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500">Announcements</p>
+                <p class="text-2xl font-semibold text-gray-900 mt-1"><?php echo esc_html($announcement_count); ?></p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500">Direct Messages</p>
+                <p class="text-2xl font-semibold text-gray-900 mt-1"><?php echo esc_html($message_count); ?></p>
+            </div>
+            <div class="rounded-lg border border-gray-200 bg-gray-50 p-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500">Reachable Students</p>
+                <p class="text-2xl font-semibold text-gray-900 mt-1"><?php echo esc_html($reachable_students); ?></p>
+            </div>
+        </div>
+    </div>
+
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div class="bg-white border border-gray-200 rounded-lg p-4">
             <h3 class="text-lg font-semibold text-gray-900 mb-3">Post Announcement</h3>

@@ -122,9 +122,41 @@ if (!empty($content_items) && function_exists('nds_portal_ensure_quiz_attempts_t
         }
     }
 }
+
+$total_sections = count($sections);
+$total_items = count($content_items);
+$visible_items = 0;
+foreach ($content_items as $item) {
+    if (!empty($item['is_visible'])) {
+        $visible_items++;
+    }
+}
 ?>
 
 <div class="space-y-6">
+    <div class="bg-white border border-gray-200 rounded-xl p-5 sm:p-6">
+        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+                <h2 class="text-xl font-semibold text-gray-900">Course Layout</h2>
+                <p class="text-sm text-gray-600 mt-1">Manage sections, release rules, and visibility for course learning content.</p>
+            </div>
+            <div class="grid grid-cols-3 gap-2 sm:gap-3 min-w-[260px]">
+                <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                    <p class="text-[11px] uppercase tracking-wide text-gray-500">Sections</p>
+                    <p class="text-lg font-semibold text-gray-900"><?php echo esc_html((string) $total_sections); ?></p>
+                </div>
+                <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                    <p class="text-[11px] uppercase tracking-wide text-gray-500">Items</p>
+                    <p class="text-lg font-semibold text-gray-900"><?php echo esc_html((string) $total_items); ?></p>
+                </div>
+                <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                    <p class="text-[11px] uppercase tracking-wide text-gray-500">Visible</p>
+                    <p class="text-lg font-semibold text-gray-900"><?php echo esc_html((string) $visible_items); ?></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <?php if (isset($_GET['structure_notice'])) : ?>
         <?php $structure_notice = sanitize_key((string) wp_unslash($_GET['structure_notice'])); ?>
         <div class="p-4 rounded-lg border border-green-200 bg-green-50 text-green-800 text-sm">

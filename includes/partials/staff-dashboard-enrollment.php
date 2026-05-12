@@ -23,11 +23,38 @@ if ($selected_course_id > 0) {
         (int) $active_semester_id
     ), ARRAY_A);
 }
+
+$total_enrolled = count($enrolled_rows);
+$active_enrolled = 0;
+foreach ($enrolled_rows as $row) {
+    if (in_array(strtolower((string) ($row['status'] ?? '')), array('active', 'enrolled'), true)) {
+        $active_enrolled++;
+    }
+}
 ?>
 
 <div class="space-y-6">
+    <div class="bg-white border border-gray-200 rounded-xl p-5 sm:p-6">
+        <div class="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
+            <div>
+                <h2 class="text-xl font-semibold text-gray-900">Enrollment Management</h2>
+                <p class="text-sm text-gray-600 mt-1">Add or remove learners from the selected course for the active term.</p>
+            </div>
+            <div class="grid grid-cols-2 gap-3 min-w-[220px]">
+                <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                    <p class="text-[11px] uppercase tracking-wide text-gray-500">Total</p>
+                    <p class="text-lg font-semibold text-gray-900"><?php echo esc_html((string) $total_enrolled); ?></p>
+                </div>
+                <div class="rounded-lg bg-gray-50 border border-gray-200 px-3 py-2">
+                    <p class="text-[11px] uppercase tracking-wide text-gray-500">Active</p>
+                    <p class="text-lg font-semibold text-gray-900"><?php echo esc_html((string) $active_enrolled); ?></p>
+                </div>
+            </div>
+        </div>
+    </div>
+
     <div class="bg-white border border-gray-200 rounded-lg p-4">
-        <h3 class="text-lg font-semibold text-gray-900 mb-3">Enrollment Management</h3>
+        <h3 class="text-lg font-semibold text-gray-900 mb-3">Course Enrollment Controls</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
                 <label class="block text-xs font-medium text-gray-700 mb-1">Course</label>

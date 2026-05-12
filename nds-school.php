@@ -1417,6 +1417,204 @@ add_action('wp_ajax_nds_portal_start_quiz_attempt', function () {
     wp_send_json_success(array('started_at' => $now));
 });
 
+add_action('wp_ajax_nds_save_quiz_progress', function () {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+
+    $student_id = (int) nds_portal_get_current_student_id();
+    $quiz_id = isset($_POST['quiz_id']) ? (int) $_POST['quiz_id'] : 0;
+    if ($student_id <= 0 || $quiz_id <= 0) {
+        wp_send_json_error('Invalid request.');
+    }
+
+    $payload = [];
+    foreach ($_POST as $key => $value) {
+        if (strpos((string) $key, 'q_') === 0) {
+            $payload[$key] = is_array($value) ? array_map('sanitize_text_field', wp_unslash($value)) : sanitize_text_field(wp_unslash((string) $value));
+        }
+    }
+
+    set_transient('nds_quiz_progress_' . $student_id . '_' . $quiz_id, wp_json_encode($payload), 6 * HOUR_IN_SECONDS);
+    wp_send_json_success(['saved' => true]);
+});
+
+add_action('wp_ajax_nds_submit_quiz_attempt', function () {
+    if (!is_user_logged_in()) {
+        wp_send_json_error('Unauthorized', 401);
+    }
+
+    $student_id = (int) nds_portal_get_current_student_id();
+    $quiz_id = isset($_POST['quiz_id']) ? (int) $_POST['quiz_id'] : 0;
+    $content_id = isset($_POST['content_id']) ? (int) $_POST['content_id'] : 0;
+    $nonce = isset($_POST['nds_quiz_take_nonce']) ? sanitize_text_field(wp_unslash($_POST['nds_quiz_take_nonce'])) : '';
+
+    if ($student_id <= 0 || $quiz_id <= 0) {
+        wp_send_json_error('Invalid quiz request.');
+    }
+    if ($nonce === '' || !wp_verify_nonce($nonce, 'nds_quiz_take_' . $quiz_id)) {
+        wp_send_json_error('Invalid request token.', 403);
+    }
+
+    global $wpdb;
+
+    $quiz = $wpdb->get_row($wpdb->prepare(
+        "SELECT * FROM {$wpdb->prefix}nds_quizzes WHERE id = %d",
+        $quiz_id
+    ), ARRAY_A);
+    if (empty($quiz)) {
+        wp_send_json_error('Quiz not found.');
+    }
+
+    $quiz_questions = $wpdb->get_results($wpdb->prepare(
+        "SELECT qq.question_id, qq.mark, q.question_type
+         FROM {$wpdb->prefix}nds_quiz_questions qq
+         INNER JOIN {$wpdb->prefix}nds_questions q ON q.id = qq.question_id
+         WHERE qq.quiz_id = %d
+         ORDER BY qq.question_order ASC, qq.id ASC",
+        $quiz_id
+    ), ARRAY_A);
+    if (empty($quiz_questions)) {
+        wp_send_json_error('No questions configured for this quiz.');
+    }
+
+    $attempt_table = $wpdb->prefix . 'nds_quiz_attempts';
+    $response_table = $wpdb->prefix . 'nds_quiz_responses';
+    $attempt_cols = $wpdb->get_col("SHOW COLUMNS FROM {$attempt_table}", 0);
+
+    $attempt_no = 1;
+    if (is_array($attempt_cols)) {
+        if (in_array('attempt_number', $attempt_cols, true)) {
+            $attempt_no = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(MAX(attempt_number), 0) + 1 FROM {$attempt_table} WHERE quiz_id = %d AND student_id = %d",
+                $quiz_id,
+                $student_id
+            ));
+        } elseif (in_array('attempt_no', $attempt_cols, true)) {
+            $attempt_no = (int) $wpdb->get_var($wpdb->prepare(
+                "SELECT COALESCE(MAX(attempt_no), 0) + 1 FROM {$attempt_table} WHERE content_id = %d AND student_id = %d",
+                $content_id,
+                $student_id
+            ));
+        }
+    }
+    if ($attempt_no <= 0) {
+        $attempt_no = 1;
+    }
+
+    $start_raw = isset($_POST['attempt_start']) ? sanitize_text_field(wp_unslash($_POST['attempt_start'])) : current_time('mysql');
+    $start_ts = strtotime($start_raw);
+    $end_ts = current_time('timestamp');
+    if ($start_ts === false) {
+        $start_ts = $end_ts;
+    }
+    $time_spent = max(0, $end_ts - $start_ts);
+
+    $total_questions = 0;
+    $correct_answers = 0;
+    $objective_count = 0;
+    $score_total = 0.0;
+
+    $attempt_data = [];
+    if (in_array('quiz_id', $attempt_cols, true)) { $attempt_data['quiz_id'] = $quiz_id; }
+    if (in_array('content_id', $attempt_cols, true)) { $attempt_data['content_id'] = $content_id; }
+    if (in_array('student_id', $attempt_cols, true)) { $attempt_data['student_id'] = $student_id; }
+    if (in_array('module_id', $attempt_cols, true)) { $attempt_data['module_id'] = (int) ($quiz['module_id'] ?? 0); }
+    if (in_array('course_id', $attempt_cols, true)) { $attempt_data['course_id'] = (int) ($quiz['course_id'] ?? 0); }
+    if (in_array('attempt_number', $attempt_cols, true)) { $attempt_data['attempt_number'] = $attempt_no; }
+    if (in_array('attempt_no', $attempt_cols, true)) { $attempt_data['attempt_no'] = $attempt_no; }
+    if (in_array('start_time', $attempt_cols, true)) { $attempt_data['start_time'] = date('Y-m-d H:i:s', $start_ts); }
+    if (in_array('started_at', $attempt_cols, true)) { $attempt_data['started_at'] = date('Y-m-d H:i:s', $start_ts); }
+    if (in_array('end_time', $attempt_cols, true)) { $attempt_data['end_time'] = current_time('mysql'); }
+    if (in_array('submitted_at', $attempt_cols, true)) { $attempt_data['submitted_at'] = current_time('mysql'); }
+    if (in_array('time_spent', $attempt_cols, true)) { $attempt_data['time_spent'] = $time_spent; }
+    if (in_array('duration_seconds', $attempt_cols, true)) { $attempt_data['duration_seconds'] = $time_spent; }
+    if (in_array('status', $attempt_cols, true)) { $attempt_data['status'] = 'completed'; }
+
+    $all_answers = [];
+    $response_rows = [];
+
+    foreach ($quiz_questions as $qq) {
+        $question_id = (int) $qq['question_id'];
+        $question_type = sanitize_key((string) ($qq['question_type'] ?? 'multiple_choice'));
+        $max_mark = (float) ($qq['mark'] ?? 1);
+        if ($max_mark <= 0) {
+            $max_mark = 1.0;
+        }
+
+        $field_key = 'q_' . $question_id;
+        $student_answer = isset($_POST[$field_key]) ? wp_unslash($_POST[$field_key]) : '';
+        $student_answer = is_array($student_answer) ? wp_json_encode($student_answer) : (string) $student_answer;
+        $all_answers[$question_id] = $student_answer;
+
+        $is_correct = 0;
+        $marks_earned = 0.0;
+
+        if (in_array($question_type, ['multiple_choice', 'true_false'], true)) {
+            $objective_count++;
+            if ($question_type === 'multiple_choice') {
+                $correct_answer_id = (int) $wpdb->get_var($wpdb->prepare(
+                    "SELECT id FROM {$wpdb->prefix}nds_question_answers WHERE question_id = %d AND is_correct = 1 ORDER BY id ASC LIMIT 1",
+                    $question_id
+                ));
+                $is_correct = ((int) $student_answer === $correct_answer_id) ? 1 : 0;
+            } else {
+                $correct_true_false = strtolower((string) $wpdb->get_var($wpdb->prepare(
+                    "SELECT answer_text FROM {$wpdb->prefix}nds_question_answers WHERE question_id = %d AND is_correct = 1 ORDER BY id ASC LIMIT 1",
+                    $question_id
+                )));
+                $is_correct = (strtolower(trim($student_answer)) === trim($correct_true_false)) ? 1 : 0;
+            }
+
+            if ($is_correct) {
+                $marks_earned = $max_mark;
+                $correct_answers++;
+                $score_total += $max_mark;
+            }
+        }
+
+        $total_questions++;
+
+        $response_rows[] = [
+            'question_id' => $question_id,
+            'response_data' => $student_answer,
+            'is_correct' => $is_correct,
+            'marks_earned' => $marks_earned,
+            'feedback' => null,
+            'graded_by' => null,
+            'graded_at' => null,
+        ];
+    }
+
+    if (in_array('total_questions', $attempt_cols, true)) { $attempt_data['total_questions'] = $total_questions; }
+    if (in_array('graded_questions', $attempt_cols, true)) { $attempt_data['graded_questions'] = $objective_count; }
+    if (in_array('correct_answers', $attempt_cols, true)) { $attempt_data['correct_answers'] = $correct_answers; }
+    if (in_array('answers_json', $attempt_cols, true)) { $attempt_data['answers_json'] = wp_json_encode($all_answers); }
+
+    $final_grade = $objective_count > 0 ? round(($correct_answers / $objective_count) * 100, 2) : null;
+    if (in_array('final_grade', $attempt_cols, true)) { $attempt_data['final_grade'] = $final_grade; }
+    if (in_array('score_percent', $attempt_cols, true)) { $attempt_data['score_percent'] = $final_grade; }
+
+    $insert_attempt = $wpdb->insert($attempt_table, $attempt_data);
+    if ($insert_attempt === false) {
+        wp_send_json_error('Unable to save quiz attempt. ' . $wpdb->last_error);
+    }
+
+    $attempt_id = (int) $wpdb->insert_id;
+    foreach ($response_rows as $response_row) {
+        $response_row['attempt_id'] = $attempt_id;
+        $wpdb->insert($response_table, $response_row);
+    }
+
+    delete_transient('nds_quiz_progress_' . $student_id . '_' . $quiz_id);
+    wp_send_json_success([
+        'attempt_id' => $attempt_id,
+        'attempt_number' => $attempt_no,
+        'final_grade' => $final_grade,
+        'message' => 'Quiz submitted successfully.'
+    ]);
+});
+
 add_action('wp_ajax_nds_portal_submit_assignment', function () {
     if (!is_user_logged_in()) {
         wp_send_json_error('Unauthorized', 401);
@@ -2797,17 +2995,17 @@ function nds_program_template_redirect() {
         // FullCalendar CSS
         wp_enqueue_style(
             'fullcalendar-css',
-            'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css',
+            plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.css',
             array(),
-            '6.1.10'
+            '5.11.5'
         );
         
         // FullCalendar JS
         wp_enqueue_script(
             'fullcalendar-js',
-            'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js',
+            plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.js',
             array('jquery'),
-            '6.1.10',
+            '5.11.5',
             true
         );
         
@@ -3220,17 +3418,17 @@ add_action('wp_enqueue_scripts', function () {
     // FullCalendar CSS
     wp_enqueue_style(
         'fullcalendar-css',
-        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css',
+        plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.css',
         array(),
-        '6.1.10'
+        '5.11.5'
     );
     
     // FullCalendar JS
     wp_enqueue_script(
         'fullcalendar-js',
-        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js',
+        plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.js',
         array('jquery'),
-        '6.1.10',
+        '5.11.5',
         true
     );
     
@@ -3309,17 +3507,17 @@ add_action('wp_enqueue_scripts', function () {
     // FullCalendar CSS
     wp_enqueue_style(
         'fullcalendar-css',
-        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css',
+        plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.css',
         array(),
-        '6.1.10'
+        '5.11.5'
     );
     
     // FullCalendar JS
     wp_enqueue_script(
         'fullcalendar-js',
-        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js',
+        plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.js',
         array('jquery'),
-        '6.1.10',
+        '5.11.5',
         true
     );
     
@@ -3392,16 +3590,16 @@ add_action('wp_enqueue_scripts', function () {
 
     wp_enqueue_style(
         'fullcalendar-css',
-        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.css',
+        plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.css',
         array(),
-        '6.1.10'
+        '5.11.5'
     );
 
     wp_enqueue_script(
         'fullcalendar-js',
-        'https://cdn.jsdelivr.net/npm/fullcalendar@6.1.10/index.global.min.js',
+        plugin_dir_url(__FILE__) . 'assets/vendor/fullcalendar/main.min.js',
         array('jquery'),
-        '6.1.10',
+        '5.11.5',
         true
     );
 

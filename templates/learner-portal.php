@@ -1674,7 +1674,42 @@ $unread_count = count($unread_notifications);
                                     </a>
                                 </div>
 
-                                <?php if (!empty($selected_quiz_content) && !empty($selected_quiz_questions)) : ?>
+                                <?php
+                                $use_new_quiz_taker = false;
+                                $new_quiz = null;
+                                $new_quiz_questions = [];
+                                if (!empty($selected_quiz_content)) {
+                                    $quiz_payload = json_decode((string) ($selected_quiz_content['quiz_data'] ?? ''), true);
+                                    $new_quiz_id = is_array($quiz_payload) ? (int) ($quiz_payload['quiz_id'] ?? 0) : 0;
+                                    if ($new_quiz_id > 0) {
+                                        $new_quiz = $wpdb->get_row($wpdb->prepare(
+                                            "SELECT * FROM {$wpdb->prefix}nds_quizzes WHERE id = %d",
+                                            $new_quiz_id
+                                        ), ARRAY_A);
+                                        if (!empty($new_quiz)) {
+                                            $new_quiz_questions = $wpdb->get_results($wpdb->prepare(
+                                                "SELECT qq.question_id AS id, qq.mark, qq.question_order, qq.page_number,
+                                                        q.question_text, q.question_type
+                                                 FROM {$wpdb->prefix}nds_quiz_questions qq
+                                                 INNER JOIN {$wpdb->prefix}nds_questions q ON q.id = qq.question_id
+                                                 WHERE qq.quiz_id = %d
+                                                 ORDER BY qq.question_order ASC, qq.id ASC",
+                                                $new_quiz_id
+                                            ), ARRAY_A);
+                                            $use_new_quiz_taker = !empty($new_quiz_questions);
+                                        }
+                                    }
+                                }
+                                ?>
+
+                                <?php if ($use_new_quiz_taker) : ?>
+                                    <?php
+                                    $quiz = $new_quiz;
+                                    $questions = $new_quiz_questions;
+                                    $attempt = null;
+                                    include plugin_dir_path(__FILE__) . '../includes/partials/learner-quiz-taker.php';
+                                    ?>
+                                <?php elseif (!empty($selected_quiz_content) && !empty($selected_quiz_questions)) : ?>
                                     <div class="bg-white border border-indigo-200 rounded-xl shadow-sm overflow-hidden" id="nds-quiz-attempt-panel">
                                         <div class="bg-indigo-600 px-6 py-5 text-white">
                                             <div class="text-xs uppercase tracking-widest text-indigo-100 font-semibold mb-1">Quiz</div>

@@ -231,6 +231,7 @@ function nds_staff_portal_schema_version() {
 
 function nds_staff_ensure_portal_tables() {
     global $wpdb;
+    $prefix = $wpdb->prefix;
     $charset_collate = $wpdb->get_charset_collate();
     require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
@@ -272,9 +273,19 @@ function nds_staff_ensure_portal_tables() {
     ) $charset_collate;";
     dbDelta($sql_content);
 
+    $wpdb->query("ALTER TABLE {$prefix}nds_lecturer_content 
+ADD COLUMN IF NOT EXISTS file_size bigint(20) DEFAULT 0,
+ADD COLUMN IF NOT EXISTS file_type varchar(50) DEFAULT '',
+ADD COLUMN IF NOT EXISTS module_id int(11) DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS access_start datetime DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS access_end datetime DEFAULT NULL,
+ADD COLUMN IF NOT EXISTS is_visible tinyint(1) DEFAULT 1");
+
     // Migrate: add any columns that may be missing from older installs
     $existing_cols = $wpdb->get_col("SHOW COLUMNS FROM {$t_content}");
     $migrations = array(
+        'file_size'           => "ALTER TABLE {$t_content} ADD COLUMN file_size BIGINT(20) DEFAULT 0 AFTER attachment_url",
+        'file_type'           => "ALTER TABLE {$t_content} ADD COLUMN file_type VARCHAR(50) DEFAULT '' AFTER file_size",
         'module_id'           => "ALTER TABLE {$t_content} ADD COLUMN module_id INT NULL AFTER course_id",
         'section_id'          => "ALTER TABLE {$t_content} ADD COLUMN section_id BIGINT UNSIGNED NULL AFTER module_id",
         'quiz_data'           => "ALTER TABLE {$t_content} ADD COLUMN quiz_data LONGTEXT NULL AFTER description",
@@ -347,6 +358,143 @@ function nds_staff_ensure_portal_tables() {
         KEY idx_category (category)
     ) $charset_collate;";
     dbDelta($sql_question_bank);
+
+    // Revamped quiz engine tables (lecturer-focused)
+    $t_quizzes = $wpdb->prefix . 'nds_quizzes';
+    $sql_quizzes = "CREATE TABLE IF NOT EXISTS $t_quizzes (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        course_id int(11) NOT NULL,
+        module_id int(11) DEFAULT NULL,
+        name varchar(255) NOT NULL,
+        description text,
+        time_limit int(11) DEFAULT 0,
+        attempts_allowed int(11) DEFAULT 1,
+        passing_grade decimal(5,2) DEFAULT 60.00,
+        shuffle_questions tinyint(1) DEFAULT 0,
+        shuffle_answers tinyint(1) DEFAULT 0,
+        show_answers_after tinyint(1) DEFAULT 0,
+        show_correct_answers tinyint(1) DEFAULT 0,
+        questions_per_page int(11) DEFAULT 0,
+        requires_lockdown tinyint(1) DEFAULT 0,
+        grade_method varchar(20) DEFAULT 'highest',
+        review_attempts tinyint(1) DEFAULT 1,
+        open_date datetime DEFAULT NULL,
+        close_date datetime DEFAULT NULL,
+        time_created datetime DEFAULT CURRENT_TIMESTAMP,
+        time_modified datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY course_id (course_id),
+        KEY module_id (module_id)
+    ) $charset_collate;";
+    dbDelta($sql_quizzes);
+
+    $t_questions = $wpdb->prefix . 'nds_questions';
+    $sql_questions = "CREATE TABLE IF NOT EXISTS $t_questions (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        question_type varchar(50) NOT NULL,
+        category varchar(100) DEFAULT 'General',
+        question_text longtext NOT NULL,
+        question_markup longtext,
+        explanation text,
+        default_mark decimal(5,2) DEFAULT 1.00,
+        created_by int(11) NOT NULL,
+        created_at datetime DEFAULT CURRENT_TIMESTAMP,
+        updated_at datetime DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+        PRIMARY KEY (id),
+        KEY created_by (created_by),
+        KEY category (category)
+    ) $charset_collate;";
+    dbDelta($sql_questions);
+
+    $t_quiz_questions = $wpdb->prefix . 'nds_quiz_questions';
+    $sql_quiz_questions = "CREATE TABLE IF NOT EXISTS $t_quiz_questions (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        quiz_id int(11) NOT NULL,
+        question_id int(11) NOT NULL,
+        mark decimal(5,2) NOT NULL DEFAULT 1.00,
+        question_order int(11) DEFAULT 0,
+        page_number int(11) DEFAULT 1,
+        PRIMARY KEY (id),
+        UNIQUE KEY quiz_question (quiz_id, question_id),
+        KEY quiz_id (quiz_id),
+        KEY question_id (question_id)
+    ) $charset_collate;";
+    dbDelta($sql_quiz_questions);
+
+    $t_question_answers = $wpdb->prefix . 'nds_question_answers';
+    $sql_question_answers = "CREATE TABLE IF NOT EXISTS $t_question_answers (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        question_id int(11) NOT NULL,
+        answer_text text NOT NULL,
+        is_correct tinyint(1) DEFAULT 0,
+        feedback text,
+        weight decimal(5,2) DEFAULT 1.00,
+        answer_order int(11) DEFAULT 0,
+        PRIMARY KEY (id),
+        KEY question_id (question_id)
+    ) $charset_collate;";
+    dbDelta($sql_question_answers);
+
+    $t_quiz_attempts = $wpdb->prefix . 'nds_quiz_attempts';
+    $sql_quiz_attempts = "CREATE TABLE IF NOT EXISTS $t_quiz_attempts (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        quiz_id int(11) NOT NULL,
+        student_id int(11) NOT NULL,
+        attempt_number int(11) NOT NULL,
+        start_time datetime NOT NULL,
+        end_time datetime DEFAULT NULL,
+        time_spent int(11) DEFAULT 0,
+        status varchar(20) DEFAULT 'in_progress',
+        final_grade decimal(5,2) DEFAULT NULL,
+        PRIMARY KEY (id),
+        UNIQUE KEY quiz_student_attempt (quiz_id, student_id, attempt_number),
+        KEY student_id (student_id),
+        KEY quiz_id (quiz_id)
+    ) $charset_collate;";
+    dbDelta($sql_quiz_attempts);
+
+    // Backward-safe: add revamped fields on existing nds_quiz_attempts installs.
+    $existing_attempt_cols = $wpdb->get_col("SHOW COLUMNS FROM {$t_quiz_attempts}", 0);
+    if (is_array($existing_attempt_cols)) {
+        if (!in_array('quiz_id', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN quiz_id int(11) DEFAULT NULL");
+        }
+        if (!in_array('attempt_number', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN attempt_number int(11) DEFAULT 1");
+        }
+        if (!in_array('start_time', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN start_time datetime DEFAULT NULL");
+        }
+        if (!in_array('end_time', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN end_time datetime DEFAULT NULL");
+        }
+        if (!in_array('time_spent', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN time_spent int(11) DEFAULT 0");
+        }
+        if (!in_array('status', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN status varchar(20) DEFAULT 'in_progress'");
+        }
+        if (!in_array('final_grade', $existing_attempt_cols, true)) {
+            $wpdb->query("ALTER TABLE {$t_quiz_attempts} ADD COLUMN final_grade decimal(5,2) DEFAULT NULL");
+        }
+    }
+
+    $t_quiz_responses = $wpdb->prefix . 'nds_quiz_responses';
+    $sql_quiz_responses = "CREATE TABLE IF NOT EXISTS $t_quiz_responses (
+        id int(11) NOT NULL AUTO_INCREMENT,
+        attempt_id int(11) NOT NULL,
+        question_id int(11) NOT NULL,
+        response_data longtext,
+        is_correct tinyint(1) DEFAULT 0,
+        marks_earned decimal(5,2) DEFAULT 0.00,
+        feedback text,
+        graded_by int(11) DEFAULT NULL,
+        graded_at datetime DEFAULT NULL,
+        PRIMARY KEY (id),
+        KEY attempt_id (attempt_id),
+        KEY question_id (question_id)
+    ) $charset_collate;";
+    dbDelta($sql_quiz_responses);
 
     $t_submissions = $wpdb->prefix . 'nds_assessment_submissions';
     $sql_submissions = "CREATE TABLE IF NOT EXISTS $t_submissions (
