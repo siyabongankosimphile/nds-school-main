@@ -37,14 +37,8 @@ if (!empty($lecturer_course_ids)) {
             ARRAY_A
         );
     } else {
-        // No module-level assignments: show all modules for assigned courses (course-level assignment)
-        $all_modules = $wpdb->get_results(
-            "SELECT m.id, m.name, {$module_code_expr}, m.type, {$module_status_expr}, m.course_id
-             FROM {$wpdb->prefix}nds_modules m
-             WHERE m.course_id IN ($ids_placeholder)
-             ORDER BY m.course_id ASC, m.id ASC",
-            ARRAY_A
-        );
+        // No module-level assignments: lecturer must be explicitly assigned to modules
+        $all_modules = array();
     }
     foreach ($all_modules as $mod) {
         $modules_by_course[(int) $mod['course_id']][] = $mod;

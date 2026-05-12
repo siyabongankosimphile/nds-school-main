@@ -1490,9 +1490,9 @@ function nds_student_applications_page() {
                                     </td>
                                     <td class="px-6 py-4 whitespace-nowrap text-sm font-medium">
                                         <a href="<?php echo admin_url('admin.php?page=nds-edit-learner&id=' . $application->id); ?>" 
-                                           class="inline-flex items-center px-3 py-1.5 rounded-lg border border-gray-200 text-xs font-medium text-gray-700 hover:border-indigo-400 hover:bg-indigo-50">
-                                            View
-                                        </a>
+                                           class="text-blue-600 hover:text-blue-900 mr-3">Review</a>
+                                        <button onclick="approveApplication(<?php echo $application->id; ?>)" 
+                                                class="text-green-600 hover:text-green-900 mr-3">Approve</button>
                                     </td>
                                 </tr>
                             <?php endforeach; ?>
@@ -1507,6 +1507,32 @@ function nds_student_applications_page() {
         </div>
     </div>
 
+    <script>
+    function approveApplication(studentId) {
+        if (!confirm('Approve this application?')) return;
+        const params = new URLSearchParams();
+        params.append('action', 'nds_approve_student_application');
+        params.append('student_id', studentId);
+        params.append('nonce', '<?php echo wp_create_nonce('nds_approve_application_nonce'); ?>');
+
+        fetch('<?php echo admin_url('admin-ajax.php'); ?>', {
+            method: 'POST',
+            headers: { 'Accept': 'application/json', 'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8' },
+            credentials: 'same-origin',
+            body: params.toString()
+        })
+        .then(r => r.json())
+        .then(data => {
+            if (data && data.success) {
+                // Refresh to reflect updated counts and list
+                window.location.reload();
+            } else {
+                alert('Failed to approve: ' + (data && data.data ? data.data : 'unknown error'));
+            }
+        })
+        .catch(() => alert('Network error while approving'));
+    }
+    </script>
     <?php
 }
 

@@ -21,10 +21,10 @@ $module_lecturers_table = $wpdb->prefix . 'nds_module_lecturers';
 $courses_table = $wpdb->prefix . 'nds_courses';
 $programs_table = $wpdb->prefix . 'nds_programs';
 
-// Get modules assigned to this lecturer
+// Get modules uniquely assigned to this lecturer
 $assigned_modules = $wpdb->get_results(
     $wpdb->prepare(
-        "SELECT m.*, c.name as course_name, c.id as course_id, c.code as course_code, p.name as program_name, p.id as program_id
+        "SELECT DISTINCT m.*, c.name as course_name, c.id as course_id, c.code as course_code, p.name as program_name, p.id as program_id
          FROM {$modules_table} m
          INNER JOIN {$module_lecturers_table} ml ON m.id = ml.module_id
          INNER JOIN {$courses_table} c ON m.course_id = c.id

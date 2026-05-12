@@ -51,16 +51,6 @@ if (!empty($assigned_module_ids)) {
          ORDER BY c.name ASC, m.name ASC",
         $assigned_module_ids
     ), ARRAY_A);
-} elseif (!empty($course_ids)) {
-    $placeholders = implode(',', array_fill(0, count($course_ids), '%d'));
-    $modules_for_form = $wpdb->get_results($wpdb->prepare(
-        "SELECT m.id, m.name, {$module_code_expr}, m.course_id, c.name AS course_name
-         FROM {$wpdb->prefix}nds_modules m
-         INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
-         WHERE m.course_id IN ($placeholders)
-         ORDER BY c.name ASC, m.name ASC",
-        $course_ids
-    ), ARRAY_A);
 }
 
 $assessments = array();
@@ -80,15 +70,7 @@ if (!empty($course_ids)) {
             array_merge($course_ids, $assigned_module_ids)
         ), ARRAY_A);
     } else {
-        $assessments = $wpdb->get_results($wpdb->prepare(
-            "SELECT a.*, c.name AS course_name, m.name AS module_name, {$module_code_expr}
-             FROM {$wpdb->prefix}nds_assessments a
-             INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = a.course_id
-             LEFT JOIN {$wpdb->prefix}nds_modules m ON m.id = a.module_id
-             WHERE a.course_id IN ($course_placeholders)
-             ORDER BY a.created_at DESC",
-            $course_ids
-        ), ARRAY_A);
+        $assessments = array();
     }
 }
 

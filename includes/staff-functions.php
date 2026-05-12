@@ -84,11 +84,11 @@ function nds_parse_staff_lecturer_assignments($request_data) {
             return new WP_Error('invalid_assignment', 'Each lecturer assignment must include faculty, program, and qualification.');
         }
 
-        $assignments[$course_id] = array(
+        $assignments[] = array(
             'faculty_id' => $faculty_id,
             'program_id' => $program_id,
             'course_id' => $course_id,
-                'module_id' => isset($module_ids[$index]) ? intval($module_ids[$index]) : 0,
+            'module_id' => isset($module_ids[$index]) ? intval($module_ids[$index]) : 0,
         );
     }
 
@@ -115,9 +115,24 @@ function nds_sync_staff_lecturer_assignments($staff_id, array $lecturer_assignme
         ));
     }
 
-        // Sync module assignments
+        // Sync module assignments — only clear modules for courses currently being managed,
+        // preserving Module Management AJAX assignments for any other courses.
         $module_link_table = $wpdb->prefix . 'nds_module_lecturers';
-        $wpdb->delete($module_link_table, array('lecturer_id' => $staff_id), array('%d'));
+        $synced_course_ids = array_unique(array_filter(array_map(function($a) {
+            return intval($a['course_id']);
+        }, $lecturer_assignments)));
+
+        if (!empty($synced_course_ids)) {
+            $course_id_csv = implode(',', $synced_course_ids);
+            $wpdb->query($wpdb->prepare(
+                "DELETE ml FROM {$module_link_table} ml
+                 INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = ml.module_id
+                 WHERE ml.lecturer_id = %d AND m.course_id IN ({$course_id_csv})",
+                $staff_id
+            ));
+        } else {
+            $wpdb->delete($module_link_table, array('lecturer_id' => $staff_id), array('%d'));
+        }
 
         foreach ($lecturer_assignments as $assignment) {
             if (!empty($assignment['module_id']) && intval($assignment['module_id']) > 0) {
@@ -359,19 +374,18 @@ function nds_add_staff()
         exit;
     }
 
-    if ($is_lecturer && !empty($lecturer_assignments)) {
-        foreach ($lecturer_assignments as $assignment) {
-            $wpdb->query($wpdb->prepare(
-                "INSERT IGNORE INTO {$wpdb->prefix}nds_course_lecturers (course_id, lecturer_id) VALUES (%d, %d)",
-                intval($assignment['course_id']),
-                intval($wpdb->insert_id)
-            ));
+    $new_staff_id = intval($wpdb->insert_id);
+    if ($new_staff_id > 0) {
+        if ($is_lecturer) {
+            nds_sync_staff_lecturer_assignments($new_staff_id, $lecturer_assignments);
+        } else {
+            nds_sync_staff_lecturer_assignments($new_staff_id, array());
         }
     }
 
     // Redirect after successful insertion
     // Log create action
-    nds_log_staff_action($wpdb->insert_id, get_current_user_id(), 'create_staff', 'create', null, wp_json_encode($staff_insert_data));
+    nds_log_staff_action($new_staff_id, get_current_user_id(), 'create_staff', 'create', null, wp_json_encode($staff_insert_data));
 
     wp_redirect(admin_url('admin.php?page=nds-staff-management&success=staff_created'));
     exit;

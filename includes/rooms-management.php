@@ -33,7 +33,6 @@ function nds_rooms_redirect_url($query_args = array()) {
 }
 
 // Handle form submissions via admin_init (fires before any output, ensuring wp_redirect works)
-add_action('init', 'nds_handle_room_form');
 add_action('admin_init', 'nds_handle_room_form');
 function nds_handle_room_form() {
     if (!isset($_POST['nds_room_action'])) {

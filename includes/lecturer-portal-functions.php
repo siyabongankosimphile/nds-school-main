@@ -48,7 +48,10 @@ function nds_staff_get_lecturer_module_ids($staff_id) {
     }
 
     $rows = $wpdb->get_col($wpdb->prepare(
-        "SELECT module_id FROM {$wpdb->prefix}nds_module_lecturers WHERE lecturer_id = %d",
+        "SELECT DISTINCT ml.module_id
+         FROM {$wpdb->prefix}nds_module_lecturers ml
+         INNER JOIN {$wpdb->prefix}nds_modules m ON m.id = ml.module_id
+         WHERE ml.lecturer_id = %d",
         $staff_id
     ));
 
@@ -69,7 +72,7 @@ function nds_staff_get_lecturer_course_ids_from_modules($staff_id) {
     }
 
     $rows = $wpdb->get_col($wpdb->prepare(
-        "SELECT DISTINCT m.course_id 
+        "SELECT DISTINCT m.course_id
          FROM {$wpdb->prefix}nds_modules m
          INNER JOIN {$wpdb->prefix}nds_module_lecturers ml ON m.id = ml.module_id
          WHERE ml.lecturer_id = %d",
