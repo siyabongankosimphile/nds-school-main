@@ -267,7 +267,7 @@ if ($can_show_registration_panel) {
         $registration_modules = $wpdb->get_results($wpdb->prepare(
             "SELECT m.id, {$module_code_expr}, m.name, m.type
              FROM {$wpdb->prefix}nds_modules m
-             WHERE course_id = %d AND m.status = 'active'
+             WHERE course_id = %d
              ORDER BY name ASC",
             $registration_course_id
         ), ARRAY_A);
@@ -288,7 +288,7 @@ if ($can_show_registration_panel) {
             "SELECT m.id, {$module_code_expr}, m.name, m.type
              FROM {$wpdb->prefix}nds_modules m
              INNER JOIN {$wpdb->prefix}nds_courses c ON c.id = m.course_id
-             WHERE c.program_id = %d AND c.status = 'active' AND m.status = 'active'
+             WHERE c.program_id = %d AND c.status = 'active'
              ORDER BY m.name ASC",
             $registration_program_id
         ), ARRAY_A);
